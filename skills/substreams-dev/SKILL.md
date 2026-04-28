@@ -285,7 +285,7 @@ substreams-database-change = "4"  # Latest: 4.0.0
 
 # Protobuf serialization
 prost = "0.13"
-prost-types = "0.13"
+prost-types = "0.13"  # Required for google.protobuf.Timestamp/Any in generated src/pb/ code
 
 # Utility crates
 hex = "0.4"
@@ -314,6 +314,12 @@ strip = "debuginfo"
 **Common Pitfalls:**
 - `hex_literal` vs `hex-literal`: Rust crate names use hyphens, not underscores
 - Missing `ethabi`: Required by ABI-generated code but not always obvious
+- **Missing `prost-types`**: If `substreams build` generates `src/pb/` code that
+  references `google.protobuf.Timestamp` or `google.protobuf.Any`, you will get
+  `error[E0433]: failed to resolve: use of undeclared crate or module prost_types`.
+  Ensure `prost-types = "0.13"` is in `[dependencies]` — the version must match
+  your `prost` major (currently `0.13` for the current substreams toolchain).
+  The template above includes it; do not remove it.
 - Version mismatch: Mixing 0.6/0.7 substreams versions causes linking errors
 - If you get "symbol multiply defined" errors, run `rm -rf target && substreams build`
 

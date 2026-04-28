@@ -336,6 +336,136 @@ pub fn store_totals(events: Events, store: StoreAddInt64) {
 }
 ```
 
+### Token Metadata: ALWAYS Use a Store, NEVER a HashMap
+
+> **Anti-pattern — DO NOT do this:**
+
+```rust
+// ❌ WRONG: per-block HashMap cache. Re-fetched every block. Wastes RPC budget.
+#[substreams::handlers::map]
+pub fn map_swaps(block: Block) -> Result<Swaps, Error> {
+    let mut token_cache: HashMap<String, TokenMeta> = HashMap::new();  // ❌ scope = single block
+    for log in block.logs() {
+        let meta = token_cache.entry(addr.clone())
+            .or_insert_with(|| fetch_token_metadata(&addr));  // ❌ fetched fresh next block
+        // ...
+    }
+}
+```
+
+A `HashMap` declared inside a map handler is **rebuilt every block**. With ~50 unique pools per block × 2 tokens × 2 RPC calls (symbol + decimals), that's 200 RPCs per block — 20,000 over a 100-block run. The hosted Substreams runtime enforces RPC budgets; this pattern will fail at scale and waste quota at any scale.
+
+> **Correct pattern — use a `set_if_not_exists` store:**
+
+Token metadata (`symbol`, `decimals`, `name`) is **immutable per contract address**. Cache once, read forever. The idiomatic chain:
+
+```
+map_token_addresses  →  store_token_metadata  →  map_swaps (reads from store)
+```
+
+The `store_token_metadata` handler runs the RPC **only the first time** each address is seen across the entire run — `set_if_not_exists` skips writes for keys already present. After that, `map_swaps` reads metadata from the store with **zero RPC per block**.
+
+### Calling Contracts from a Map Handler (eth_call)
+
+**Yes, you can — and often should — call contracts from a map module.**
+
+`substreams-ethereum::rpc::RpcBatch` works in map handlers. The host runtime executes the batch synchronously before returning to your handler. There is no architectural restriction preventing RPCs in maps; this is a common misconception.
+
+**Copy-paste example — batch ERC20 metadata lookup:**
+
+```rust
+use substreams_ethereum::rpc::RpcBatch;
+// generated from build.rs / ABI codegen (or write by hand):
+use crate::abi::erc20;
+
+fn fetch_token_metadata(token_addr: &[u8]) -> (String, u32) {
+    let batch = RpcBatch::new();
+    let responses = batch
+        .add(erc20::functions::Symbol {}, token_addr.to_vec())
+        .add(erc20::functions::Decimals {}, token_addr.to_vec())
+        .execute()
+        .expect("RPC batch failed");
+
+    let symbol = match RpcBatch::decode::<_, erc20::functions::Symbol>(&responses.responses[0]) {
+        Some(s) => s,
+        None => "UNKNOWN".to_string(),
+    };
+    let decimals = match RpcBatch::decode::<_, erc20::functions::Decimals>(&responses.responses[1]) {
+        Some(d) => d.to_u64() as u32,
+        None => 18u32,  // ⚠ silently wrong for USDC (6), USDT (6), WBTC (8) — log + skip instead
+    };
+    (symbol, decimals)
+}
+```
+
+> **Warning on `None => 18` fallback:** defaulting to 18 decimals produces silently wrong values for non-18-decimal tokens. If RPC fails, log + skip the record rather than emit bad data.
+
+### Full module graph: cache once, read forever
+
+**`substreams.yaml`:**
+
+```yaml
+modules:
+  - name: map_token_addresses
+    kind: map
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:my.types.v1.TokenAddresses
+
+  - name: store_token_metadata
+    kind: store
+    updatePolicy: set_if_not_exists   # ← write once, never overwrite
+    valueType: proto:my.types.v1.TokenMeta
+    inputs:
+      - map: map_token_addresses
+
+  - name: map_swaps
+    kind: map
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+      - store: store_token_metadata
+        mode: get
+    output:
+      type: proto:my.types.v1.Swaps
+```
+
+**`store_token_metadata` handler (RPC fires here, ONCE per address):**
+
+```rust
+#[substreams::handlers::store]
+pub fn store_token_metadata(
+    addrs: TokenAddresses,
+    store: StoreSetIfNotExistsProto<TokenMeta>,
+) {
+    for addr_hex in &addrs.addresses {
+        let addr_bytes = hex::decode(addr_hex.trim_start_matches("0x")).unwrap_or_default();
+        let (symbol, decimals) = fetch_token_metadata(&addr_bytes);
+        store.set_if_not_exists(0, addr_hex, &TokenMeta { symbol, decimals });
+    }
+}
+```
+
+**`map_swaps` handler (zero RPC after first seen):**
+
+```rust
+#[substreams::handlers::map]
+pub fn map_swaps(
+    block: Block,
+    meta_store: StoreGetProto<TokenMeta>,
+) -> Result<Swaps, substreams::errors::Error> {
+    let mut swaps = Swaps::default();
+    for pool_log in extract_swap_logs(&block) {
+        let meta = meta_store.get_last(&pool_log.token_address)
+            .unwrap_or_else(|| TokenMeta { symbol: "UNKNOWN".into(), decimals: 18 });
+        swaps.items.push(build_swap(pool_log, meta));
+    }
+    Ok(swaps)
+}
+```
+
+**Rule of thumb**: if a value is immutable per contract address (symbol, decimals, factory deployment, pair tokens), use a `set_if_not_exists` store. If you wrote `let mut cache: HashMap<...> = HashMap::new();` inside a map handler, you have a bug.
+
 ### Best Practices
 
 * **Handle errors gracefully**: Use `Result<T, Error>` returns
@@ -538,6 +668,8 @@ See [references/patterns.md](./references/patterns.md) for detailed examples:
 * Parameterized modules
 * Dynamic data sources
 * **Database sink patterns** (delta updates, composite keys, sink SQL workflow)
+* **Token metadata caching** — always store, never HashMap; see "Token Metadata: ALWAYS Use a Store" above
+* **Contract calls from maps** — RpcBatch works in map handlers; see "Calling Contracts from a Map Handler" above
 
 ## Querying Chain Head Block
 

@@ -188,6 +188,26 @@ immediately.
     type: proto:sf.substreams.index.v1.Keys
 ```
 
+> **`initialBlock` guidance:**
+> ```yaml
+> modules:
+>   - name: map_events
+>     kind: map
+>     initialBlock: 18000000   # ✅ start of your test/data range
+>     # NOT: 12369621          # ❌ protocol genesis — forces full backfill on every run
+>     inputs:
+>       - source: sf.ethereum.type.v2.Block
+>     output:
+>       type: proto:my.types.Events
+> ```
+> Pin `initialBlock` to the first block your downstream consumer actually needs.
+> The runtime starts processing from `max(--start-block, initialBlock)`, then
+> walks forward. Stores must catch up from `initialBlock` on each cold start —
+> a deep genesis pin turns a 100-block test into a multi-hour backfill.
+>
+> For reference: the T3.2 golden uses `initialBlock: 17999900` to cover a
+> `-s 18000000 -t +100` acceptance window.
+
 ### Debugging Checklist
 
 When modules produce unexpected results:
@@ -197,7 +217,14 @@ When modules produce unexpected results:
 3. **Check logs**: Look for WASM panics, protobuf decode errors
 4. **Verify schema**: Ensure proto types match expected data
 5. **Review inputs**: Confirm input modules produce correct data
-6. **Initial block**: Check `initialBlock` is set appropriately
+6. **Initial block**: Check `initialBlock` is set appropriately.
+   - Set it to the **earliest block your test range starts from**, not the protocol's
+     first block. If you only need data from block 18000000, use `initialBlock: 18000000`.
+   - The runtime seeds stores forward from `initialBlock`. If you pin to protocol
+     genesis (e.g. 12369621 for Uniswap V3) but test at block 18000000, the sink
+     must backfill 5.6M blocks before producing output — impractical for local runs.
+   - For production: pin to the earliest block your downstream consumer cares about.
+   - For one-off testing: pin to a narrow window covering your test range.
 
 ### Performance Optimization
 

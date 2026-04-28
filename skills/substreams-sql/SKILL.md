@@ -66,7 +66,10 @@ The CDC approach streams individual database operations (INSERT, UPDATE, DELETE)
 **Rust Implementation**:
 ```rust
 use substreams::prelude::*;
+// Always use the fully-qualified v4 path:
 use substreams_database_change::pb::sf::substreams::sink::database::v1::DatabaseChanges;
+// DEPRECATED (v3): substreams_database_change::pb::database::DatabaseChanges — still compiles
+// on crate v4 but will be removed; use the FQN above.
 use substreams_database_change::tables::Tables;
 
 #[substreams::handlers::map]
@@ -106,8 +109,10 @@ package:
   version: 1.0.3
 
 imports:
-    database: https://github.com/streamingfast/substreams-sink-database-changes/releases/download/v3.0.0/substreams-sink-database-changes-v3.0.0.spkg
+    # Use the latest v4+ spkg so the proto FQN matches the Rust crate:
+    database: https://github.com/streamingfast/substreams-sink-database-changes/releases/download/v4.0.0/substreams-sink-database-changes-v4.0.0.spkg
     sql: https://github.com/streamingfast/substreams-sink-sql/releases/download/protodefs-v1.0.7/substreams-sink-sql-protodefs-v1.0.7.spkg
+    # Note: v3 spkg import still works but exposes the deprecated short-path proto names.
 
 protobuf:
   excludePaths:
@@ -142,6 +147,8 @@ sink:
 [dependencies]
 substreams-database-change = "4"  # Latest: 4.0.0
 ```
+
+> **Note — graph-out (Entity Changes) is a DIFFERENT sink type:** if your project also needs The Graph output, use `sf.substreams.sink.entity.v1.EntityChanges` (NOT `DatabaseChanges`) and follow the inline-proto workaround in `substreams-sink` under "Graph Node / The Graph Output". Do not add `substreams-entity-change = "1"` directly — it conflicts with `prost = "0.13"`.
 
 **Running the sink** (DSN is passed on the command line, not in the manifest):
 ```bash

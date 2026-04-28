@@ -921,14 +921,14 @@ Solana uses a different block model, instruction paradigm, and account system th
 
 ```toml
 [dependencies]
-substreams = "0.5"
+substreams = "0.6"             # MUST be 0.6+ — substreams-solana requires prost 0.13; substreams 0.5 pins prost 0.11 (conflict)
 substreams-solana = "0.14.3"   # Block model + helpers
 bs58 = "0.4"                   # pubkey/signature encode/decode
-prost = "0.11"
-prost-types = "0.11"
+prost = "0.13"
+prost-types = "0.13"
 
 [build-dependencies]
-prost-build = "0.11"
+prost-build = "0.13"
 
 [profile.release]
 lto = true
@@ -953,89 +953,76 @@ modules:
       type: proto:mypackage.v1.MyOutput
 ```
 
-### Block struct access
+### Block access — two patterns
 
 ```rust
 use substreams_solana::pb::sf::solana::r#type::v1::Block;
+use substreams_solana::{b58, Block as BlockExt};  // helper trait
 
-#[substreams::handlers::map]
-fn map_my_module(block: Block) -> Result<MyOutput, substreams::errors::Error> {
-    for tx in &block.transactions {
-        let meta = match tx.meta.as_ref() {
-            Some(m) if m.err.is_none() => m,  // successful only
-            _ => continue,
-        };
-        let transaction = match tx.transaction.as_ref() {
-            Some(t) => t,
-            None => continue,
-        };
-        let message = match transaction.message.as_ref() {
-            Some(m) => m,
-            None => continue,
-        };
+// Pattern A: iterate ALL transactions (including failed) — use for stats/counting
+for tx in &block.transactions {
+    let is_failed = tx.meta.as_ref().map(|m| m.err.is_some()).unwrap_or(true);
+    let compute = tx.meta.as_ref()
+        .and_then(|m| m.compute_units_consumed)
+        .unwrap_or(0);
+    // tx.transaction.as_ref().unwrap().signatures[0] = raw signature bytes
+}
 
-        // Transaction signature (base58)
-        let signature = bs58::encode(&transaction.signatures[0]).into_string();
-
-        // Full account list: static keys + loaded ALT keys (writable then readonly)
-        let mut accounts: Vec<Vec<u8>> = message.account_keys.clone();
-        accounts.extend_from_slice(&meta.loaded_writable_addresses);
-        accounts.extend_from_slice(&meta.loaded_readonly_addresses);
-
-        // Top-level instructions
-        for ix in &message.instructions {
-            // ix.program_id_index → index into accounts
-            // ix.accounts → Bytes where each byte is an account index
-            // ix.data → raw instruction data bytes
-        }
-
-        // Inner instructions — ALWAYS iterate these too
-        // Most real Solana programs (DEX, DeFi) emit token transfers as inner instructions
-        for inner in &meta.inner_instructions {
-            for ix in &inner.instructions {
-                // same fields as top-level
-            }
-        }
+// Pattern B: iterate successful transactions with ergonomic helpers (most common)
+// block.transactions() filters to successful only — use trx helpers for instruction walking
+for trx in block.transactions() {
+    let sig: String = trx.id();      // base58 transaction signature
+    for ix_view in trx.walk_instructions() {
+        // ix_view.program_id() → [u8; 32]
+        // ix_view.data()       → &[u8]
+        // ix_view.accounts()   → Vec<Address>  (each Address implements Display as base58)
     }
+}
+```
+
+> **`block.transactions()` returns successful transactions only** (skips failed). For stats that need ALL transactions (including failed), use `&block.transactions` raw field (Pattern A).
+
+> **`walk_instructions()` handles inner instructions automatically.** This is the key method — it yields both top-level instructions and all inner instructions (CPI calls). Never manually iterate `meta.inner_instructions` — use `walk_instructions()` instead.
+
+### Program ID filtering with `b58!`
+
+`b58!` is a compile-time macro that converts a base58 string to `[u8; 32]` — faster and cleaner than runtime decode:
+
+```rust
+use substreams_solana::b58;
+
+const SPL_TOKEN: [u8; 32] = b58!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+const USDC_MINT: [u8; 32] = b58!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+
+for ix_view in trx.walk_instructions() {
+    if ix_view.program_id() != SPL_TOKEN { continue; }
     // ...
 }
 ```
 
-> **Inner instructions are mandatory.** DEX aggregators (Jupiter), DeFi protocols, and most production programs invoke SPL Token via CPI. The token transfer or state change is an inner instruction. Skip them = miss >50% of real events.
-
-### Account resolution helper
-
-```rust
-fn resolve_account(accounts: &[Vec<u8>], index: usize) -> Option<String> {
-    accounts.get(index).map(|pk| bs58::encode(pk).into_string())
-}
-
-// Filter by program ID:
-let prog = resolve_account(&accounts, ix.program_id_index as usize).unwrap_or_default();
-if prog != "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" { continue; }
-```
-
 ### SPL Token parsing
 
-SPL Token program: `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`
-
-Instruction discriminator = first byte of `ix.data`:
-- `3` = Transfer: `[source, dest, authority, ...signers]`, data = `[3u8, amount:u64 LE]`
-- `12` = TransferChecked: `[source, mint, dest, authority, ...signers]`, data = `[12u8, amount:u64 LE, decimals:u8]`
+Instruction discriminator = first byte of `ix_view.data()`:
+- `3` = Transfer: accounts `[source, dest, authority, ...signers]`, data = `[3u8, amount:u64 LE]`
+- `12` = TransferChecked: accounts `[source, mint, dest, authority, ...signers]`, data = `[12u8, amount:u64 LE, decimals:u8]`
 
 ```rust
-match ix.data.first().copied() {
-    Some(3) if ix.data.len() >= 9 => {
-        let amount = u64::from_le_bytes(ix.data[1..9].try_into().unwrap());
-        let source = resolve_account(&accounts, ix.accounts[0] as usize);
-        let dest   = resolve_account(&accounts, ix.accounts[1] as usize);
-        // authority = ix.accounts[2]
+let data = ix_view.data();
+let accounts = ix_view.accounts();   // Vec<Address>
+
+match data.first().copied() {
+    Some(3) if data.len() >= 9 && accounts.len() >= 3 => {
+        let amount = u64::from_le_bytes(data[1..9].try_into().unwrap());
+        let source = accounts[0].to_string();
+        let dest   = accounts[1].to_string();
+        let auth   = accounts[2].to_string();
     }
-    Some(12) if ix.data.len() >= 9 => {
-        let amount = u64::from_le_bytes(ix.data[1..9].try_into().unwrap());
-        let source = resolve_account(&accounts, ix.accounts[0] as usize);
-        // mint   = ix.accounts[1] — use this to filter by token mint
-        let dest   = resolve_account(&accounts, ix.accounts[2] as usize);
+    Some(12) if data.len() >= 10 && accounts.len() >= 4 => {
+        if accounts[1] != USDC_MINT { /* not USDC — skip */ }
+        let amount = u64::from_le_bytes(data[1..9].try_into().unwrap());
+        let source = accounts[0].to_string();
+        let dest   = accounts[2].to_string();
+        let auth   = accounts[3].to_string();
     }
     _ => {}
 }

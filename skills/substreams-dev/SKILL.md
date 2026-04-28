@@ -471,6 +471,50 @@ fn fetch_token_metadata(token_addr: &[u8]) -> (String, u32) {
 
 > **Warning on `None => 18` fallback:** defaulting to 18 decimals produces silently wrong values for non-18-decimal tokens. If RPC fails, log + skip the record rather than emit bad data.
 
+#### ABI codegen output types: BigInt, not ethabi::Uint
+
+`substreams-ethereum-abigen` (the build.rs codegen) emits `substreams::scalar::BigInt` for any `uint*` or `int*` field — including `uint256`, `int256`, and the wider `uint8`/`uint32`/etc. It does NOT emit `ethabi::Uint` or `ethabi::Int`.
+
+```rust
+// ❌ WRONG — older API; abigen does not emit ethabi types
+fn format_amount(raw: &ethabi::Uint, decimals: u32) -> String { /* ... */ }
+
+// ✅ CORRECT — abigen emits BigInt
+use substreams::scalar::BigInt;
+fn format_amount(raw: &BigInt, decimals: u32) -> String {
+    raw.to_decimal(decimals as u64).to_string()
+}
+```
+
+If you need a primitive integer (e.g. converting `decimals()` BigInt to `u32`):
+
+```rust
+// BigInt → primitive (assumes value fits — overflow is silent)
+let decimals_u32: u32 = big_int_value.to_u64() as u32;
+let amount_i64:  i64 = big_int_value.to_i64();
+```
+
+For signed `int256` values from event fields, use `BigInt::to_decimal(decimals)` for human-readable string, or the `signum()` + `abs()` methods to inspect sign.
+
+#### Generated `.call()` method takes one argument (the contract address)
+
+`substreams-ethereum-abigen` emits a `.call(address)` method on each function struct that performs the eth_call via the substreams host. It takes exactly ONE argument — the contract address. There is no second `&block` argument.
+
+```rust
+use crate::abi::erc20::functions;
+
+// ❌ WRONG — older two-arg form (predates current substreams-ethereum)
+let decimals = functions::Decimals::call(token_addr, &block);
+
+// ✅ CORRECT — single-arg form, returns Option<T>
+let decimals_opt: Option<BigInt> = functions::Decimals {}.call(token_addr.to_vec());
+let decimals: u32 = decimals_opt.map(|d| d.to_u64() as u32).unwrap_or(18);
+```
+
+`.call()` returns `Option<T>` — `None` on RPC failure or decode failure. Always handle the `None` arm; do not `.unwrap()` in production code.
+
+For batched calls covering multiple eth_calls in one round-trip, prefer `RpcBatch::new().add(...)` (shown above).
+
 ### Full module graph: cache once, read forever
 
 **`substreams.yaml`:**

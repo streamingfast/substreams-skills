@@ -39,6 +39,22 @@ docker pull ghcr.io/streamingfast/substreams-sink-sql:v4.12.0
 
 ## Core Concepts
 
+### Pre-flight: Clarifying Under-Specified SQL Requests
+
+SQL sink projects require several inputs before code can be written. If any
+of the following are missing, ask the user ONCE before proceeding:
+
+| Required input | Why it matters |
+|---|---|
+| **Chain + contract/protocol** | Determines module inputs and event shape |
+| **Database engine** | PostgreSQL vs ClickHouse have different schema syntax and sink flags |
+| **Data shape / tables** | Which entities, which fields, which primary keys? |
+| **Block range** | `initialBlock` and test window for `substreams-sink-sql run` |
+| **Aggregations needed?** | Delta updates vs raw event rows vs materialized views |
+
+If any item is unknown, collect all missing answers in a single question
+before writing manifests, schemas, or Rust code.
+
 ### What is Substreams SQL?
 
 Substreams SQL enables you to:

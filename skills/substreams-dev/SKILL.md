@@ -115,6 +115,38 @@ The `substreams auth` command handles token exchange and local storage automatic
 
 ## Common Workflows
 
+### Pre-flight: Clarifying Under-Specified Requests
+
+Before writing any code, check whether the request provides all of the
+following. If one or more items are missing or ambiguous, ask the user ONCE
+with a consolidated list — do not make silent assumptions and do not write code
+until you have the answers.
+
+| Required input | Why it matters |
+|---|---|
+| **Target chain** | Block type, RPC endpoints, and ABI tooling differ per chain |
+| **Contract address(es) or protocol** | Determines which events/calls to decode |
+| **Data you want to capture** | Events only? Calls? State changes? Aggregations? |
+| **Output / sink type** | `substreams run`, SQL sink, graph-out, custom sink? |
+| **Block range or time window** | `initialBlock` and test range; performance implications |
+| **Thresholds or filters** | Min value, token allowlist, address filter, etc. |
+
+**If any item is unknown**, respond with something like:
+
+> Before I build this, I need a few details:
+> 1. Which chain? (Ethereum mainnet, Polygon, Arbitrum, ...)
+> 2. Which contract(s) or protocol?
+> 3. What specific events or data fields do you need?
+> 4. Where should the output go? (Postgres, The Graph, just `substreams run`?)
+> 5. What start block or date range?
+> 6. Any filters — minimum transfer size, specific token list, etc.?
+
+Only ask once. If you receive partial answers, proceed with what you have and
+state your remaining assumptions explicitly in your response.
+
+**If the prompt is concrete and complete**, skip the checklist and build
+immediately.
+
 ### Creating a New Project
 
 1. **Initialize**: Use `substreams init` or create manifest manually

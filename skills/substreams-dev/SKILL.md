@@ -218,9 +218,15 @@ See [references/manifest-spec.md](./references/manifest-spec.md) for complete sp
 specVersion: v0.1.0
 package:
   name: my-substreams
-  version: 1.0.3
+  version: v1.0.3   # MUST have 'v' prefix — bare semver like "1.0.3" is rejected
   description: Description of what this substreams does
 ```
+
+> **`version` requires a `v` prefix.** Use `v0.1.0`, not `0.1.0`. The error
+> message (`version "0.1.0" should match Semver`) is misleading — both forms
+> are valid semver, but Substreams mandates the `v`-prefixed form. This applies
+> to the top-level `package.version` only; `specVersion` already shows the
+> correct prefix.
 
 **Protobuf imports**:
 ```yaml
@@ -745,6 +751,8 @@ Read the first line of output to get the head block information.
 
 **Build fails**:
 
+* **`version "x.y.z" should match Semver`**: Add a `v` prefix to `package.version`
+  in `substreams.yaml` — use `v0.1.0`, not `0.1.0`.
 * Check Rust toolchain: `rustup target add wasm32-unknown-unknown`
 * Ensure `buf` CLI is installed (required for proto generation)
 * Verify proto imports are correct

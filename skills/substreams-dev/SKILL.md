@@ -860,6 +860,231 @@ If you see errors like "no method named `decode` found":
 * Add indexes to skip irrelevant blocks
 * Use `--production-mode` for large ranges
 
+## graph_out Modules (The Graph / Subgraph Output)
+
+> **Also load `substreams-sink` skill** when building a `graph_out` module. It contains the full working example and the EntityChanges proto definition.
+
+Key facts to avoid the most common mistake:
+
+| You want to write to | Output proto | Package |
+|---|---|---|
+| The Graph / subgraph | `EntityChanges` | `sf.substreams.sink.entity.v1` |
+| Postgres / SQL | `DatabaseChanges` | `sf.substreams.sink.database.v1` |
+
+**These are NOT interchangeable.** Using `DatabaseChanges` in a `graph_out` module (or vice versa) compiles but produces a pipeline that fails or emits garbage.
+
+### Quick pattern (full example in substreams-sink skill)
+
+Do NOT add `substreams-entity-change = "1"` to Cargo.toml — v1 has a `prost` version conflict with the current toolchain. Instead, inline the proto:
+
+**`proto/entity.proto`** (exact package name required):
+```proto
+syntax = "proto3";
+package sf.substreams.sink.entity.v1;
+
+message EntityChanges {
+  repeated EntityChange entity_changes = 1;
+}
+message EntityChange {
+  enum Operation { UNSET=0; CREATE=1; UPDATE=2; DELETE=3; FINAL=4; }
+  string entity = 1;
+  string id = 2;
+  uint64 ordinal = 3;
+  Operation operation = 4;
+  repeated Field fields = 5;
+}
+message Field {
+  string name = 1;
+  string new_value = 3;
+}
+```
+
+**`substreams.yaml`** output type:
+```yaml
+output:
+  type: proto:sf.substreams.sink.entity.v1.EntityChanges
+```
+
+**Rust import** (after proto is compiled via build.rs):
+```rust
+use crate::pb::sf::substreams::sink::entity::v1::{EntityChange, EntityChanges, Field};
+use crate::pb::sf::substreams::sink::entity::v1::entity_change::Operation;
+```
+
+---
+
+## Solana Substreams
+
+Solana uses a different block model, instruction paradigm, and account system than EVM chains. Do not apply Ethereum patterns here.
+
+### Cargo.toml
+
+```toml
+[dependencies]
+substreams = "0.5"
+substreams-solana = "0.14.3"   # Block model + helpers
+bs58 = "0.4"                   # pubkey/signature encode/decode
+prost = "0.11"
+prost-types = "0.11"
+
+[build-dependencies]
+prost-build = "0.11"
+
+[profile.release]
+lto = true
+opt-level = "s"
+strip = "debuginfo"
+```
+
+### Manifest
+
+```yaml
+specVersion: v0.1.0
+package:
+  name: my_solana_substreams
+  version: v0.1.0
+network: solana
+modules:
+  - name: map_my_module
+    kind: map
+    inputs:
+      - source: sf.solana.type.v1.Block
+    output:
+      type: proto:mypackage.v1.MyOutput
+```
+
+### Block struct access
+
+```rust
+use substreams_solana::pb::sf::solana::r#type::v1::Block;
+
+#[substreams::handlers::map]
+fn map_my_module(block: Block) -> Result<MyOutput, substreams::errors::Error> {
+    for tx in &block.transactions {
+        let meta = match tx.meta.as_ref() {
+            Some(m) if m.err.is_none() => m,  // successful only
+            _ => continue,
+        };
+        let transaction = match tx.transaction.as_ref() {
+            Some(t) => t,
+            None => continue,
+        };
+        let message = match transaction.message.as_ref() {
+            Some(m) => m,
+            None => continue,
+        };
+
+        // Transaction signature (base58)
+        let signature = bs58::encode(&transaction.signatures[0]).into_string();
+
+        // Full account list: static keys + loaded ALT keys (writable then readonly)
+        let mut accounts: Vec<Vec<u8>> = message.account_keys.clone();
+        accounts.extend_from_slice(&meta.loaded_writable_addresses);
+        accounts.extend_from_slice(&meta.loaded_readonly_addresses);
+
+        // Top-level instructions
+        for ix in &message.instructions {
+            // ix.program_id_index → index into accounts
+            // ix.accounts → Bytes where each byte is an account index
+            // ix.data → raw instruction data bytes
+        }
+
+        // Inner instructions — ALWAYS iterate these too
+        // Most real Solana programs (DEX, DeFi) emit token transfers as inner instructions
+        for inner in &meta.inner_instructions {
+            for ix in &inner.instructions {
+                // same fields as top-level
+            }
+        }
+    }
+    // ...
+}
+```
+
+> **Inner instructions are mandatory.** DEX aggregators (Jupiter), DeFi protocols, and most production programs invoke SPL Token via CPI. The token transfer or state change is an inner instruction. Skip them = miss >50% of real events.
+
+### Account resolution helper
+
+```rust
+fn resolve_account(accounts: &[Vec<u8>], index: usize) -> Option<String> {
+    accounts.get(index).map(|pk| bs58::encode(pk).into_string())
+}
+
+// Filter by program ID:
+let prog = resolve_account(&accounts, ix.program_id_index as usize).unwrap_or_default();
+if prog != "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" { continue; }
+```
+
+### SPL Token parsing
+
+SPL Token program: `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`
+
+Instruction discriminator = first byte of `ix.data`:
+- `3` = Transfer: `[source, dest, authority, ...signers]`, data = `[3u8, amount:u64 LE]`
+- `12` = TransferChecked: `[source, mint, dest, authority, ...signers]`, data = `[12u8, amount:u64 LE, decimals:u8]`
+
+```rust
+match ix.data.first().copied() {
+    Some(3) if ix.data.len() >= 9 => {
+        let amount = u64::from_le_bytes(ix.data[1..9].try_into().unwrap());
+        let source = resolve_account(&accounts, ix.accounts[0] as usize);
+        let dest   = resolve_account(&accounts, ix.accounts[1] as usize);
+        // authority = ix.accounts[2]
+    }
+    Some(12) if ix.data.len() >= 9 => {
+        let amount = u64::from_le_bytes(ix.data[1..9].try_into().unwrap());
+        let source = resolve_account(&accounts, ix.accounts[0] as usize);
+        // mint   = ix.accounts[1] — use this to filter by token mint
+        let dest   = resolve_account(&accounts, ix.accounts[2] as usize);
+    }
+    _ => {}
+}
+```
+
+### Anchor discriminator
+
+Anchor programs prefix instruction data with an 8-byte discriminator: `sha256("global:<instruction_name>")[0..8]`
+
+```rust
+// Add to Cargo.toml: sha2 = "0.10"
+use sha2::{Digest, Sha256};
+
+fn anchor_discriminator(name: &str) -> [u8; 8] {
+    let hash = Sha256::digest(format!("global:{name}").as_bytes());
+    hash[..8].try_into().unwrap()
+}
+
+fn is_anchor_ix(ix: &CompiledInstruction, disc: &[u8; 8]) -> bool {
+    ix.data.len() >= 8 && &ix.data[..8] == disc
+}
+
+// Usage:
+let swap_disc = anchor_discriminator("swap");
+if is_anchor_ix(ix, &swap_disc) { /* it's a swap */ }
+```
+
+### Block-level fields
+
+```rust
+block.slot          // u64 — slot number
+block.parent_slot   // u64 — parent slot
+
+// Failed transaction check:
+tx.meta.as_ref().map(|m| m.err.is_some()).unwrap_or(true)  // true = failed
+
+// Compute units consumed (successful txns only):
+meta.compute_units_consumed  // Option<u64> (may be None on older slots)
+```
+
+### Running against Solana
+
+```bash
+# Uses network: solana in substreams.yaml to route to mainnet endpoint
+substreams run ./substreams.yaml map_my_module -s 320000000 -t +100 -o jsonl
+```
+
+---
+
 ## Resources
 
 * [Official Documentation](https://substreams.streamingfast.io)

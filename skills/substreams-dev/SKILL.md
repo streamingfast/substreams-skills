@@ -607,7 +607,7 @@ fn fetch_pool_tokens(pool_addr: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     let calls = RpcCalls {
         calls: vec![
             RpcCall { to_addr: pool_addr.to_vec(), data: vec![0x0d, 0xfe, 0x16, 0x81] }, // token0()
-            RpcCall { to_addr: pool_addr.to_vec(), data: vec![0xd2, 0x10, 0x77, 0x7c] }, // token1()
+            RpcCall { to_addr: pool_addr.to_vec(), data: vec![0xd2, 0x12, 0x20, 0xa7] }, // token1()
         ],
     };
     let responses = eth_call(&calls);

@@ -122,7 +122,7 @@ The manifest requires importing the database changes and sink-sql protodefs spkg
 specVersion: v0.1.0
 package:
   name: my-substreams-sql
-  version: 1.0.3
+  version: v1.0.3
 
 imports:
     # Use the latest v4+ spkg so the proto FQN matches the Rust crate:

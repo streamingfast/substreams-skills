@@ -1053,6 +1053,26 @@ for trx in block.transactions() {
 
 > **`walk_instructions()` handles inner instructions automatically.** This is the key method — it yields both top-level instructions and all inner instructions (CPI calls). Never manually iterate `meta.inner_instructions` — use `walk_instructions()` instead.
 
+> **CRITICAL — DO NOT iterate `message.instructions` for protocol detection (F37).**
+> The compiled-instruction list (`tx.transaction.message.instructions`) holds **only top-level instructions**. On Solana, the vast majority of DEX/protocol activity (Raydium, Orca, Meteora, Jupiter routes, etc.) reaches your target program through CPI from an aggregator or router — those calls are **inner instructions** and are invisible to `message.instructions`.
+>
+> **Concrete impact:** A T5.3 Raydium CLMM eval found that agents using `for ix in message.instructions.iter()` detected only ~10% of swaps (45 of 99 blocks; 80 of 846 swaps). Agents using `for ix in trx.walk_instructions()` detected 100%. Same discriminators, same program ID — only iteration changed.
+>
+> ```rust
+> // ❌ WRONG — misses 90% of Solana protocol activity
+> for instr in tx.transaction.as_ref().unwrap().message.as_ref().unwrap().instructions.iter() {
+>     if instr.program_id_index as usize ... { /* never sees aggregator-routed swaps */ }
+> }
+>
+> // ✅ CORRECT — sees top-level + all inner CPI instructions
+> for ix_view in trx.walk_instructions() {
+>     if ix_view.program_id() != TARGET_PROGRAM { continue; }
+>     // ...
+> }
+> ```
+>
+> If you find yourself writing `message.instructions` or resolving `program_id_index` against `account_keys` by hand, stop and rewrite with `walk_instructions()`. There is essentially never a reason to use the raw form.
+
 ### Program ID filtering with `b58!`
 
 `b58!` is a compile-time macro that converts a base58 string to `[u8; 32]` — faster and cleaner than runtime decode:

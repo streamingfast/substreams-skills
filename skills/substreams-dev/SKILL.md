@@ -968,12 +968,28 @@ message EntityChange {
   Operation operation = 4;
   repeated Field fields = 5;
 }
+message Value {
+  oneof typed {
+    int32  int32      = 1;
+    string bigdecimal = 2;
+    string bigint     = 3;
+    string string     = 4;
+    bytes  bytes      = 5;
+    bool   bool       = 6;
+    Array  array      = 10;
+  }
+}
+message Array {
+  repeated Value value = 1;
+}
 message Field {
-  string name = 1;
-  // tag 2 (old_value) omitted — only needed for UPDATE operations
-  string new_value = 3;  // simplified; canonical uses sf.substreams.sink.entity.v1.Value (oneof)
+  string name      = 1;
+  Value  old_value = 2;
+  Value  new_value = 3;
 }
 ```
+
+> **Wire compatibility:** Copy this proto verbatim from the [canonical source](https://github.com/streamingfast/substreams-sink-entity-changes/blob/develop/proto/sf/substreams/sink/entity/v1/entity.proto). The package name, message names, field numbers, and field types must all match exactly — simplifying any type (e.g. `string` for `new_value`) will produce empty/garbage values in Graph Node.
 
 **`substreams.yaml`** output type:
 ```yaml
@@ -1131,6 +1147,7 @@ Anchor programs prefix instruction data with an 8-byte discriminator: `sha256("g
 ```rust
 // Add to Cargo.toml: sha2 = "0.10"
 use sha2::{Digest, Sha256};
+use substreams_solana::pb::sf::solana::r#type::v1::CompiledInstruction;
 
 fn anchor_discriminator(name: &str) -> [u8; 8] {
     let hash = Sha256::digest(format!("global:{name}").as_bytes());

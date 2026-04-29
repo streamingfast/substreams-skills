@@ -112,14 +112,30 @@ message EntityChange {
   repeated Field fields  = 5;
 }
 
+message Value {
+  oneof typed {
+    int32  int32      = 1;
+    string bigdecimal = 2;
+    string bigint     = 3;
+    string string     = 4;
+    bytes  bytes      = 5;
+    bool   bool       = 6;
+    Array  array      = 10;
+  }
+}
+
+message Array {
+  repeated Value value = 1;
+}
+
 message Field {
   string name      = 1;
-  // tag 2 (old_value) omitted — only needed for UPDATE operations
-  string new_value = 3;  // simplified; canonical uses sf.substreams.sink.entity.v1.Value (oneof)
+  Value  old_value = 2;  // previous value — required for UPDATE/undo operations
+  Value  new_value = 3;
 }
 ```
 
-> Filename matters less than the package: `package sf.substreams.sink.entity.v1;` is the wire-format anchor. Do NOT change it to `sf.substreams.sink.database.v1` — that's the SQL sink, a different contract entirely.
+> **Wire compatibility:** Both the package name AND the exact message/field definitions (numbers + types) must match. `package sf.substreams.sink.entity.v1;` is required — do NOT change it to `sf.substreams.sink.database.v1` (that's the SQL sink). Copy this proto verbatim from the [canonical source](https://github.com/streamingfast/substreams-sink-entity-changes/blob/develop/proto/sf/substreams/sink/entity/v1/entity.proto) — do not simplify field types or the output will decode as empty values in Graph Node.
 
 **2. Reference in manifest** (`substreams.yaml`):
 

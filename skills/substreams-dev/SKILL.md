@@ -585,14 +585,17 @@ pub fn map_swaps(
 
 > **Common failure mode:** agents use call traces or hardcode known tokens instead of batching `token0()`/`token1()` eth_calls. Call traces are incomplete — they only appear when the pool is the *callee*, not for every swap. This silently produces `UNKNOWN` tokens for most pools.
 
-V3 pools store `token0` and `token1` as immutable state. Resolve them with `RpcBatch` and cache in a store — same pattern as ERC20 metadata.
+V3 pools store `token0` and `token1` as immutable state. Resolve them via raw `eth_call` and cache in a store — same pattern as ERC20 metadata.
 
-**Define the function selectors inline** (no ABI JSON needed):
+**`RpcBatch::add` requires a generated ABI struct.** For pool selectors, use `eth_call` with raw `RpcCalls` directly — no ABI codegen needed:
 
 ```rust
 // Uniswap V3 pool: token0() → address, token1() → address
 // selector = keccak256("token0()")[0..4] = 0x0dfe1681
 // selector = keccak256("token1()")[0..4] = 0xd21220a7
+
+use substreams_ethereum::pb::eth::rpc::{RpcCall, RpcCalls};
+use substreams_ethereum::rpc::eth_call;
 
 fn decode_address_return(raw: &[u8]) -> Option<Vec<u8>> {
     // ABI: address is padded to 32 bytes, actual address is last 20
@@ -601,25 +604,21 @@ fn decode_address_return(raw: &[u8]) -> Option<Vec<u8>> {
 }
 
 fn fetch_pool_tokens(pool_addr: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-    use substreams_ethereum::rpc::RpcBatch;
-
-    let token0_selector = hex_literal::hex!("0dfe1681");
-    let token1_selector = hex_literal::hex!("d21220a7");
-
-    let batch = RpcBatch::new();
-    let responses = batch
-        .add_call(pool_addr, &token0_selector)   // no args — just the 4-byte selector
-        .add_call(pool_addr, &token1_selector)
-        .execute()
-        .ok()?;
-
+    let calls = RpcCalls {
+        calls: vec![
+            RpcCall { to_addr: pool_addr.to_vec(), data: vec![0x0d, 0xfe, 0x16, 0x81] }, // token0()
+            RpcCall { to_addr: pool_addr.to_vec(), data: vec![0xd2, 0x10, 0x77, 0x7c] }, // token1()
+        ],
+    };
+    let responses = eth_call(&calls);
+    if responses.responses.len() < 2 { return None; }
     let token0 = decode_address_return(&responses.responses[0].raw)?;
     let token1 = decode_address_return(&responses.responses[1].raw)?;
     Some((token0, token1))
 }
 ```
 
-> **`add_call` vs `add`:** `RpcBatch::add_call(addr, calldata)` takes raw calldata bytes. Use it when you don't have generated ABI structs. `RpcBatch::add(function_struct, addr)` is the abigen-generated path (needs `build.rs`). Both work in map handlers.
+> **Note:** `RpcBatch::add_call()` does NOT exist in `substreams-ethereum v0.11`. Use `eth_call(&RpcCalls { calls: [...] })` for raw calldata, or `RpcBatch::add(AbiStruct {}, addr)` when you have generated ABI structs.
 
 **Wire it into a store** (exactly like ERC20 metadata):
 

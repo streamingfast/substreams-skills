@@ -996,7 +996,7 @@ Solana uses a different block model, instruction paradigm, and account system th
 
 ```toml
 [dependencies]
-substreams = "0.6"             # MUST be 0.6+ — substreams-solana requires prost 0.13; substreams 0.5 pins prost 0.11 (conflict)
+substreams = "0.6"             # Stay on 0.6.x — substreams-solana 0.14.x is not yet compatible with substreams 0.7; 0.5 is excluded because it pins prost 0.11
 substreams-solana = "0.14.3"   # Block model + helpers
 bs58 = "0.4"                   # pubkey/signature encode/decode
 prost = "0.13"

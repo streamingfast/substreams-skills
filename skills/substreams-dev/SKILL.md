@@ -417,6 +417,7 @@ pub fn store_totals(events: Events, store: StoreAddInt64) {
 pub fn map_swaps(block: Block) -> Result<Swaps, Error> {
     let mut token_cache: HashMap<String, TokenMeta> = HashMap::new();  // ❌ scope = single block
     for log in block.logs() {
+        let addr = log.address().to_string();
         let meta = token_cache.entry(addr.clone())
             .or_insert_with(|| fetch_token_metadata(&addr));  // ❌ fetched fresh next block
         // ...
@@ -554,7 +555,10 @@ pub fn store_token_metadata(
     store: StoreSetIfNotExistsProto<TokenMeta>,
 ) {
     for addr_hex in &addrs.addresses {
-        let addr_bytes = hex::decode(addr_hex.trim_start_matches("0x")).unwrap_or_default();
+        let addr_bytes = match hex::decode(addr_hex.trim_start_matches("0x")) {
+            Ok(bytes) => bytes,
+            Err(_) => { substreams::log::warn!("invalid token address: {}", addr_hex); continue; }
+        };
         let (symbol, decimals) = fetch_token_metadata(&addr_bytes);
         store.set_if_not_exists(0, addr_hex, &TokenMeta { symbol, decimals });
     }
@@ -632,7 +636,10 @@ map_v3_pools (emits pool addresses)  →  store_pool_tokens (set_if_not_exists) 
 #[substreams::handlers::store]
 pub fn store_pool_tokens(pools: PoolAddresses, store: StoreSetIfNotExistsProto<TokenPair>) {
     for pool_hex in &pools.addresses {
-        let pool_bytes = hex::decode(pool_hex.trim_start_matches("0x")).unwrap_or_default();
+        let pool_bytes = match hex::decode(pool_hex.trim_start_matches("0x")) {
+            Ok(bytes) => bytes,
+            Err(_) => { substreams::log::warn!("invalid pool address: {}", pool_hex); continue; }
+        };
         if let Some((t0, t1)) = fetch_pool_tokens(&pool_bytes) {
             store.set_if_not_exists(0, pool_hex, &TokenPair {
                 token0: format!("0x{}", hex::encode(&t0)),

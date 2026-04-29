@@ -125,7 +125,7 @@ message Field {
 ```yaml
 protobuf:
   files:
-    - entity.proto
+    - proto/entity.proto
     # ... other protos
 
 modules:

@@ -970,7 +970,8 @@ message EntityChange {
 }
 message Field {
   string name = 1;
-  string new_value = 3;
+  // tag 2 (old_value) omitted — only needed for UPDATE operations
+  string new_value = 3;  // simplified; canonical uses sf.substreams.sink.entity.v1.Value (oneof)
 }
 ```
 

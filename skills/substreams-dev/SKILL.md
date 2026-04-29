@@ -581,6 +581,75 @@ pub fn map_swaps(
 
 **Rule of thumb**: if a value is immutable per contract address (symbol, decimals, factory deployment, pair tokens), use a `set_if_not_exists` store. If you wrote `let mut cache: HashMap<...> = HashMap::new();` inside a map handler, you have a bug.
 
+### Uniswap V3 Pool Token Resolution (F35)
+
+> **Common failure mode:** agents use call traces or hardcode known tokens instead of batching `token0()`/`token1()` eth_calls. Call traces are incomplete — they only appear when the pool is the *callee*, not for every swap. This silently produces `UNKNOWN` tokens for most pools.
+
+V3 pools store `token0` and `token1` as immutable state. Resolve them with `RpcBatch` and cache in a store — same pattern as ERC20 metadata.
+
+**Define the function selectors inline** (no ABI JSON needed):
+
+```rust
+// Uniswap V3 pool: token0() → address, token1() → address
+// selector = keccak256("token0()")[0..4] = 0x0dfe1681
+// selector = keccak256("token1()")[0..4] = 0xd21220a7
+
+fn decode_address_return(raw: &[u8]) -> Option<Vec<u8>> {
+    // ABI: address is padded to 32 bytes, actual address is last 20
+    if raw.len() < 32 { return None; }
+    Some(raw[12..32].to_vec())   // skip 12 bytes of zero-padding
+}
+
+fn fetch_pool_tokens(pool_addr: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    use substreams_ethereum::rpc::RpcBatch;
+
+    let token0_selector = hex_literal::hex!("0dfe1681");
+    let token1_selector = hex_literal::hex!("d21220a7");
+
+    let batch = RpcBatch::new();
+    let responses = batch
+        .add_call(pool_addr, &token0_selector)   // no args — just the 4-byte selector
+        .add_call(pool_addr, &token1_selector)
+        .execute()
+        .ok()?;
+
+    let token0 = decode_address_return(&responses.responses[0].raw)?;
+    let token1 = decode_address_return(&responses.responses[1].raw)?;
+    Some((token0, token1))
+}
+```
+
+> **`add_call` vs `add`:** `RpcBatch::add_call(addr, calldata)` takes raw calldata bytes. Use it when you don't have generated ABI structs. `RpcBatch::add(function_struct, addr)` is the abigen-generated path (needs `build.rs`). Both work in map handlers.
+
+**Wire it into a store** (exactly like ERC20 metadata):
+
+```
+map_v3_pools (emits pool addresses)  →  store_pool_tokens (set_if_not_exists)  →  map_v3_swaps (reads token0/token1 from store)
+```
+
+```rust
+// In map_v3_pools: emit any new pool addresses seen this block
+// In store handler:
+#[substreams::handlers::store]
+pub fn store_pool_tokens(pools: PoolAddresses, store: StoreSetIfNotExistsProto<TokenPair>) {
+    for pool_hex in &pools.addresses {
+        let pool_bytes = hex::decode(pool_hex.trim_start_matches("0x")).unwrap_or_default();
+        if let Some((t0, t1)) = fetch_pool_tokens(&pool_bytes) {
+            store.set_if_not_exists(0, pool_hex, &TokenPair {
+                token0: format!("0x{}", hex::encode(&t0)),
+                token1: format!("0x{}", hex::encode(&t1)),
+            });
+        }
+    }
+}
+
+// In map_v3_swaps: read from store (zero RPC)
+let pair = pool_store.get_last(&pool_hex)
+    .unwrap_or_default();  // default = empty strings if pool not yet seen
+```
+
+**Never use call traces for token resolution.** `block.calls()` only has entries when a call to the pool was the *top-level* transaction call or an explicit internal call — it misses pools that emitted Swap via pure EVM event emission without a visible call trace.
+
 ### Best Practices
 
 * **Handle errors gracefully**: Use `Result<T, Error>` returns

@@ -158,8 +158,22 @@ modules:
 **3. Use the generated type in Rust**:
 
 ```rust
-use crate::pb::sf::substreams::sink::entity::v1::{EntityChange, EntityChanges, Field};
+use crate::pb::sf::substreams::sink::entity::v1::{EntityChange, EntityChanges, Field, Value};
 use crate::pb::sf::substreams::sink::entity::v1::entity_change::Operation;
+use crate::pb::sf::substreams::sink::entity::v1::value::Typed;
+
+// `Field.new_value` and `old_value` are `Value` messages, so the prost-generated
+// Rust type is `Option<Value>` — you cannot assign a raw String/Vec<u8>/u64 directly.
+// Wrap each scalar in the appropriate `Typed::*` oneof variant. Helpers below
+// cover the common cases; add `Typed::Bool`, `Typed::Bytes`, `Typed::Int32`,
+// `Typed::Bigdecimal`, `Typed::Array` as needed for your schema.
+fn val_string(s: impl Into<String>) -> Option<Value> {
+    Some(Value { typed: Some(Typed::String(s.into())) })
+}
+fn val_bigint(decimal_str: impl Into<String>) -> Option<Value> {
+    // BigInt is wire-encoded as its decimal string, e.g. "12345"
+    Some(Value { typed: Some(Typed::Bigint(decimal_str.into())) })
+}
 
 #[substreams::handlers::map]
 pub fn graph_out(events: Events) -> Result<EntityChanges, substreams::errors::Error> {
@@ -172,9 +186,11 @@ pub fn graph_out(events: Events) -> Result<EntityChanges, substreams::errors::Er
             ordinal: mint.ordinal,
             operation: Operation::Create as i32,
             fields: vec![
-                Field { name: "tokenId".to_string(), new_value: mint.token_id },
-                Field { name: "to".to_string(),      new_value: mint.to },
-                Field { name: "txHash".to_string(),  new_value: mint.tx_hash },
+                // tokenId: uint256 → BigInt-as-decimal-string
+                Field { name: "tokenId".to_string(), old_value: None, new_value: val_bigint(mint.token_id.clone()) },
+                // address / hash fields: keep as hex strings for Graph Node consumption
+                Field { name: "to".to_string(),      old_value: None, new_value: val_string(mint.to.clone()) },
+                Field { name: "txHash".to_string(),  old_value: None, new_value: val_string(mint.tx_hash.clone()) },
             ],
         });
     }

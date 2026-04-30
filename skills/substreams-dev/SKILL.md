@@ -450,27 +450,24 @@ use substreams_ethereum::rpc::RpcBatch;
 // generated from build.rs / ABI codegen (or write by hand):
 use crate::abi::erc20;
 
-fn fetch_token_metadata(token_addr: &[u8]) -> (String, u32) {
+// Returns None on transient RPC failure or undecodable response — caller must skip + log.
+// Never panic from a map/store handler: an unhandled panic aborts the whole substream.
+fn fetch_token_metadata(token_addr: &[u8]) -> Option<(String, u32)> {
     let batch = RpcBatch::new();
     let responses = batch
         .add(erc20::functions::Symbol {}, token_addr.to_vec())
         .add(erc20::functions::Decimals {}, token_addr.to_vec())
         .execute()
-        .expect("RPC batch failed");
+        .ok()?;  // transient RPC error → None, do not panic
 
-    let symbol = match RpcBatch::decode::<_, erc20::functions::Symbol>(&responses.responses[0]) {
-        Some(s) => s,
-        None => "UNKNOWN".to_string(),
-    };
-    let decimals = match RpcBatch::decode::<_, erc20::functions::Decimals>(&responses.responses[1]) {
-        Some(d) => d.to_u64() as u32,
-        None => 18u32,  // ⚠ silently wrong for USDC (6), USDT (6), WBTC (8) — log + skip instead
-    };
-    (symbol, decimals)
+    let symbol   = RpcBatch::decode::<_, erc20::functions::Symbol>(&responses.responses[0])?;
+    let decimals = RpcBatch::decode::<_, erc20::functions::Decimals>(&responses.responses[1])?
+        .to_u64() as u32;  // never default to 18 — wrong for USDC/USDT (6), WBTC (8)
+    Some((symbol, decimals))
 }
 ```
 
-> **Warning on `None => 18` fallback:** defaulting to 18 decimals produces silently wrong values for non-18-decimal tokens. If RPC fails, log + skip the record rather than emit bad data.
+> **Never panic from a Substreams handler.** `.expect()` / `.unwrap()` on RPC results aborts the entire substream on any transient endpoint hiccup. Return `Option`/`Result`, then have the caller log + skip the record. Same for decimals: never silently default to 18 — emit nothing rather than wrong data.
 
 #### ABI codegen output types: BigInt, not ethabi::Uint
 
@@ -559,7 +556,10 @@ pub fn store_token_metadata(
             Ok(bytes) => bytes,
             Err(_) => { substreams::log::warn!("invalid token address: {}", addr_hex); continue; }
         };
-        let (symbol, decimals) = fetch_token_metadata(&addr_bytes);
+        let (symbol, decimals) = match fetch_token_metadata(&addr_bytes) {
+            Some(meta) => meta,
+            None => { substreams::log::warn!("token metadata fetch failed for {}", addr_hex); continue; }
+        };
         store.set_if_not_exists(0, addr_hex, &TokenMeta { symbol, decimals });
     }
 }

@@ -504,12 +504,21 @@ use crate::abi::erc20::functions;
 // ❌ WRONG — older two-arg form (predates current substreams-ethereum)
 let decimals = functions::Decimals::call(token_addr, &block);
 
-// ✅ CORRECT — single-arg form, returns Option<T>
-let decimals_opt: Option<BigInt> = functions::Decimals {}.call(token_addr.to_vec());
-let decimals: u32 = decimals_opt.map(|d| d.to_u64() as u32).unwrap_or(18);
+// ✅ CORRECT — single-arg form, returns Option<T>; propagate None, never default
+fn fetch_decimals(token_addr: &[u8]) -> Option<u32> {
+    functions::Decimals {}
+        .call(token_addr.to_vec())
+        .map(|d| d.to_u64() as u32)
+}
+
+// Caller: log + skip on None — do NOT default to 18.
+let decimals = match fetch_decimals(&addr_bytes) {
+    Some(d) => d,
+    None => { substreams::log::warn!("decimals fetch failed for {:x?}", addr_bytes); continue; }
+};
 ```
 
-`.call()` returns `Option<T>` — `None` on RPC failure or decode failure. Always handle the `None` arm; do not `.unwrap()` in production code.
+`.call()` returns `Option<T>` — `None` on RPC failure or decode failure. Always handle the `None` arm; never `.unwrap()` and never default decimals to `18` (silently wrong for USDC/USDT/WBTC). Skip the record or return `None`/`Err` to the caller.
 
 For batched calls covering multiple eth_calls in one round-trip, prefer `RpcBatch::new().add(...)` (shown above).
 

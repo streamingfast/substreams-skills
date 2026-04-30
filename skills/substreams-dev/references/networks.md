@@ -143,6 +143,22 @@ modules:
 - Different transaction structure (accounts, instructions)
 - No gas concept (uses compute units and fees)
 
+#### SPL Token filtering — TransferChecked only
+When filtering SPL token transfers by mint (e.g. USDC), only handle **`TransferChecked` (discriminator 12)**. Its account layout is `[source, mint, dest, authority, ...]` — mint is at index 1, so you can filter by it.
+
+**Do NOT handle legacy `Transfer` (discriminator 3)**. Its layout is `[source, dest, authority]` — no mint field. You cannot determine which token is being transferred, so emitting it will produce false positives for every SPL token, not just the one you want.
+
+```rust
+const TRANSFER_CHECKED: u8 = 12;
+
+match data[0] {
+    TRANSFER_CHECKED if accounts.len() >= 4 && accounts[1] == USDC_MINT => {
+        // safe to emit — mint verified
+    }
+    _ => continue, // skip legacy Transfer and everything else
+}
+```
+
 ### NEAR Protocol
 - Use `sf.near.type.v1.Block` as source input
 - Account-based model with function calls

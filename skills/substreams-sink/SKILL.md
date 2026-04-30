@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.0.3
+  version: 1.1.0
   author: StreamingFast
   documentation: https://substreams.streamingfast.io
 ---

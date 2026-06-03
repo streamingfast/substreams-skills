@@ -131,25 +131,31 @@ export function handleTransfer(event: TransferEvent): void {
 
 **After (Rust, Substreams map module):**
 
-> **Ethereum address filtering — use foundational modules + Substreams Filters, not raw `block.logs()`**
+> **Ethereum address filtering — prefer foundational `filtered_events` modules**
 >
-> Iterating `block.logs()` and filtering by address in-handler works, but it processes every log in every block. For production Ethereum Substreams, the idiomatic approach is:
+> Iterating `block.logs()` and filtering in-handler works for quick prototypes, but it still scans every block. For production, consume the foundational Ethereum Common filtered module:
 >
-> 1. **Import a foundational module** such as `graph_node_ethereum_filter` or `filtered_events` from the [`substreams-ethereum`](https://github.com/streamingfast/substreams-ethereum) package. These modules use Substreams' native **index/filter** mechanism to skip blocks that contain no logs for your address — vastly reducing WASM execution cost.
-> 2. **Use a `filtered_events` input** in your manifest so your map module only receives pre-filtered log data:
+> 1. Import `ethereum_common@v0.3.3` and use `eth_common:filtered_events` as your input (it already applies block-level filtering + event filtering).
+> 2. Override its params query with your target key (`evt_addr:0x...`) using **0x-prefixed lowercase hex**.
 >
 > ```yaml
+> imports:
+>   eth_common: ethereum_common@v0.3.3
+>
 > modules:
 >   - name: map_transfers
 >     kind: map
 >     initialBlock: 6082465
 >     inputs:
->       - map: filtered_events   # only blocks containing logs for TOKEN_ADDRESS
+>       - map: eth_common:filtered_events
 >     output:
 >       type: proto:myproject.v1.Transfers
+>
+> params:
+>   eth_common:filtered_events: "evt_addr:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
 > ```
 >
-> For a single known contract address, the simpler in-handler filter shown below is acceptable for prototyping. Switch to the foundational module pattern for production or when indexing many blocks.
+> Keep the in-handler filter shown below as a fallback only when no foundational `filtered_*` module fits your use case.
 
 ```rust
 use substreams::errors::Error;

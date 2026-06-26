@@ -62,10 +62,21 @@ modules:
 
 ### Optional Fields
 
-- `url`: Repository or documentation URL
-- `description`: Short description of the package
-- `doc`: Multi-line description (deprecated, use a `README.md` file instead)
+- `url`: Repository or documentation URL. **Always set it** — an unset `url`
+  prints `URL (package.url) is not set` on every build/pack.
+- `description`: Short description of the package. **Always set it** — an unset
+  `description` prints `Description (package.description) is not set`.
+- `doc`: Multi-line description. **DEPRECATED — do not use.** Setting it prints
+  `Deprecated: the 'package.doc' field is deprecated. The README.md file is
+  picked up instead.` Write a `README.md` next to `substreams.yaml` instead;
+  the packager picks it up automatically. A missing `README.md` prints
+  `README (package.doc) not found`.
 - `image`: Container image for custom runtime
+
+> **Avoid the scaffold-warning wall.** A package with `url` + `description` set,
+> a sibling `README.md`, and no `doc:` field builds with zero metadata warnings.
+> Omitting any of them produces non-fatal warnings that make a healthy build
+> look broken.
 
 ## Imports Section
 

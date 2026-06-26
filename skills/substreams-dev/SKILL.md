@@ -403,8 +403,9 @@ See [references/manifest-spec.md](./references/manifest-spec.md) for complete sp
 specVersion: v0.1.0
 package:
   name: my-substreams
-  version: 1.2.0
-  description: Description of what this substreams does
+  version: v1.2.0
+  url: https://github.com/myorg/my-substreams   # set it — silences "URL (package.url) is not set"
+  description: Description of what this substreams does   # set it — silences the description warning
 ```
 
 > **`version` requires a `v` prefix.** Use `v0.1.0`, not `0.1.0`. The error
@@ -412,6 +413,20 @@ package:
 > are valid semver, but Substreams mandates the `v`-prefixed form. This applies
 > to the top-level `package.version` only; `specVersion` already shows the
 > correct prefix.
+
+> **Always set `url` + `description`, and never use `package.doc`.** A freshly
+> scaffolded manifest that omits these produces a wall of non-fatal warnings on
+> every `substreams build` / `substreams pack` — confusing, looks broken, isn't.
+> To keep generated packages clean:
+> - Set `package.url` (repo or docs link) → silences `URL (package.url) is not set`.
+> - Set `package.description` → silences `Description (package.description) is not set`.
+> - Create a `README.md` next to `substreams.yaml` → silences
+>   `README (package.doc) not found`. The packager picks up `README.md`
+>   automatically (see "README for substreams.dev Registry" above).
+> - **Do NOT add a `package.doc` field.** It is deprecated and emits
+>   `Deprecated: the 'package.doc' field is deprecated. The README.md file is
+>   picked up instead.` once per build phase. If a scaffolded manifest contains
+>   `doc:` under `package:`, delete it and write a `README.md` instead.
 
 **Protobuf imports**:
 ```yaml
@@ -1058,9 +1073,28 @@ Read the first line of output to get the head block information.
 1. **Start small**: Begin with 1000 block range for testing
 2. **Use GUI**: `substreams gui` for visual debugging (when available)
 3. **Version control**: Commit `.spkg` files for reproducibility
-4. **Document modules**: Add `doc:` fields in manifest for clarity
+4. **Document modules**: Add module-level `doc:` fields for clarity (the *module* `doc:` is fine; the top-level **`package.doc` is deprecated** — use a `README.md` instead)
 
 ## Troubleshooting
+
+**Non-fatal package warnings (build still succeeds)**:
+
+These print on `substreams build` / `substreams pack` but do NOT fail the build.
+They look alarming on a freshly scaffolded project — fix them so generated
+packages are clean:
+
+* **`Deprecated: the 'package.doc' field is deprecated. The README.md file is
+  picked up instead.`** — Remove the `doc:` field under `package:` in
+  `substreams.yaml` and write a `README.md` next to the manifest instead.
+  (Printed once per build phase, so you may see it 3-4 times.)
+* **`README (package.doc) not found`** — No `README.md` beside `substreams.yaml`.
+  Create one (see "README for substreams.dev Registry").
+* **`URL (package.url) is not set`** — Add `url:` under `package:`.
+* **`Description (package.description) is not set`** — Add `description:` under
+  `package:`.
+
+All four are cleared by a `package:` block with `url` + `description` set and a
+sibling `README.md` (and no `doc:` field). See "Package metadata" above.
 
 **Build fails**:
 

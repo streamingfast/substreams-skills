@@ -122,7 +122,9 @@ The manifest requires importing the database changes and sink-sql protodefs spkg
 specVersion: v0.1.0
 package:
   name: my-substreams-sql
-  version: 1.2.0
+  version: v1.2.0
+  url: https://github.com/myorg/my-substreams-sql   # set it — avoids package.url warning
+  description: SQL sink substreams for <protocol>     # set it — avoids package.description warning
 
 imports:
     # Use the latest v4+ spkg so the proto FQN matches the Rust crate:

@@ -86,6 +86,8 @@ specVersion: v0.1.0
 package:
   name: erc20_transfers
   version: v0.1.0
+  url: https://github.com/myorg/erc20_transfers   # set it — avoids package.url warning
+  description: ERC20 transfer events indexer        # set it — avoids package.description warning
 network: mainnet          # same as subgraph network
 
 protobuf:
@@ -408,6 +410,8 @@ specVersion: v0.1.0
 package:
   name: erc20_subgraph_conversion
   version: v0.1.0
+  url: https://github.com/myorg/erc20_subgraph_conversion   # set it — avoids package.url warning
+  description: ERC20 subgraph converted to Substreams         # set it — avoids package.description warning
 network: mainnet
 
 protobuf:

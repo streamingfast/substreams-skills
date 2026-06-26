@@ -30,6 +30,9 @@ specVersion: v0.1.0
 package:
   name: my_solana_substreams
   version: v0.1.0
+  url: https://github.com/myorg/my-solana-substreams   # set it — avoids package.url warning
+  description: What this Solana substreams indexes        # set it — avoids package.description warning
+  # NOTE: do not add a `doc:` field (deprecated) — write a README.md beside this manifest instead
 network: solana
 modules:
   - name: map_my_module

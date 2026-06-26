@@ -247,7 +247,7 @@ fn estimate_fee(tx: &Transaction) -> u64 {
 specVersion: v0.1.0
 package:
   name: my-bitcoin-substreams
-  version: 1.2.0
+  version: v1.2.0
   url: https://github.com/user/repo
   description: Bitcoin data processor
 

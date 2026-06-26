@@ -251,6 +251,8 @@ specVersion: v0.1.0
 package:
   name: my_solana_program
   version: v0.1.0
+  url: https://github.com/myorg/my_solana_program   # set it — avoids package.url warning
+  description: What this Solana program substreams indexes   # set it — avoids package.description warning
 network: solana
 
 protobuf:

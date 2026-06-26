@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- `substreams-dev` — document the non-fatal package metadata build warnings (`package.doc` deprecated, missing `package.url`/`package.description`, missing `README.md`) and how to avoid them.
+- `substreams-dev`, `substreams-sql`, `substreams-bitcoin`, `substreams-convert` — manifest examples now set `package.url` + `package.description` and use a `v`-prefixed version so scaffolded packages build without metadata warnings.
+
 ## [1.2.0](https://github.com/streamingfast/substreams-skills/releases/tag/v1.2.0)
 
 ### Added

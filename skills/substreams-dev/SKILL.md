@@ -149,6 +149,61 @@ state your remaining assumptions explicitly in your response.
 **If the prompt is concrete and complete**, skip the checklist and build
 immediately.
 
+### Discovering Existing Packages (Registry Search API)
+
+**Before building from scratch, search the registry — an existing package may already index the data you need.** The substreams.dev registry exposes a public, agent-facing REST+JSON API for searching published packages. No authentication required.
+
+**Endpoint:** `GET https://substreams.dev/v1/registry/packages`
+
+**Query parameters:**
+
+| Param | Description |
+|---|---|
+| `query` | Free-text search over package name/keywords |
+| `network` | Filter by network (e.g. `mainnet`) |
+| `organization` | Filter by organization slug |
+| `user` | Filter by publisher user login |
+| `featured` | `true` to restrict to featured packages |
+| `page` | 1-based page number (default `1`) |
+| `page_size` | Results per page (default `24`, max `100`) |
+
+**Example:**
+```bash
+curl "https://substreams.dev/v1/registry/packages?query=uniswap&network=mainnet&page_size=5"
+```
+
+**Response shape:**
+```json
+{
+  "packages": [
+    {
+      "name": "uniswap-v3",
+      "slug": "uniswap-v3",
+      "organization": { "name": "Uniswap", "slug": "uniswap" },
+      "repository": "https://github.com/...",
+      "downloads": 7,
+      "releaseCount": 1,
+      "latestVersion": "v0.1.0",
+      "network": "mainnet",
+      "reference": "uniswap-v3@v0.1.0",
+      "spkg": "https://spkg.io/v1/packages/uniswap-v3/v0.1.0"
+    }
+  ],
+  "hasMore": false
+}
+```
+`hasMore` is `true` when more pages follow — increment `page` to fetch them.
+
+**`spkg` vs `reference` — pick the right one:** every result carries two forms of the same latest release.
+- **`spkg`** — full package URL. **Use this when EXECUTING a command programmatically:** `substreams run <spkg> <module>`, `substreams gui <spkg>`, or as a `substreams.yaml` dependency.
+- **`reference`** — short `<slug>@<version>` notation. **Use this when DISPLAYING a command to a human** — more readable, resolves to the same package.
+
+Both are empty when no release version is known.
+
+**Other notes:**
+- The API is rate-limited (per-IP, ~60 req/min, burst 10). Over-limit requests return `429` with a `Retry-After` header — back off and retry.
+- The full contract is published as an OpenAPI 3 document at `GET https://substreams.dev/v1/registry/openapi.yaml` (source of truth for fields and usage).
+
 ### Creating a New Project
 
 > **Migrating an existing project?** Load the **`substreams-convert` skill** if you are porting a subgraph or Solana program/contract to Substreams instead of starting from scratch.

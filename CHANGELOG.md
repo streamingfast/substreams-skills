@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Added
+
+- `substreams-dev` — registry package discovery via the new agentic search API (`GET /v1/registry/packages`), including `spkg` vs `reference` usage guidance.
+
 ## [1.2.0](https://github.com/streamingfast/substreams-skills/releases/tag/v1.2.0)
 
 ### Added

@@ -24,12 +24,15 @@ Python is useful for:
 ## Installation
 
 ```bash
-# Using poetry (recommended)
-poetry add grpcio protobuf requests
+# Using poetry (recommended) — pin to match the generated protobuf code below;
+# unpinned resolves to latest and drifts from the gencode buf emits.
+poetry add "grpcio@^1.67.0" "protobuf@^5.28.2" "requests@^2.26.0"
 
 # Or using pip
-pip install grpcio protobuf requests
+pip install "grpcio~=1.67" "protobuf~=5.28" "requests~=2.26"
 ```
+
+You also need [`buf`](https://buf.build/docs/installation) for the Protobuf Generation step below.
 
 ## Dependencies
 
@@ -63,11 +66,20 @@ buf generate "https://github.com/streamingfast/substreams-solana-spl-token/raw/r
 **buf.gen.yaml example:**
 
 ```yaml
-version: v1
+version: v2
+managed:
+  enabled: true
 plugins:
-  - plugin: buf.build/protocolbuffers/python
+  - remote: buf.build/protocolbuffers/python:v28.2
+    out: .
+  # Required: emits the *_pb2_grpc.py stubs (StreamStub etc). The message plugin
+  # above only emits *_pb2.py — without this second plugin every
+  # `import ..._pb2_grpc` below fails with ModuleNotFoundError.
+  - remote: buf.build/grpc/python:v1.67.0
     out: .
 ```
+
+The pinned plugin versions are what keep the generated code consistent with the `grpcio ^1.67.0` / `protobuf ^5.28.2` pins below.
 
 ## Basic Sink Structure
 
@@ -77,7 +89,7 @@ import os
 import sys
 import time
 import requests
-from typing import Optional
+from typing import Callable, Optional
 
 import sf.substreams.v1.package_pb2 as package_pb2
 import sf.substreams.rpc.v2.service_pb2 as service_pb2
@@ -235,7 +247,9 @@ class ErrorType(Enum):
 FATAL_CODES = {
     grpc.StatusCode.UNAUTHENTICATED,
     grpc.StatusCode.INVALID_ARGUMENT,
-    grpc.StatusCode.INTERNAL,
+    # NOT grpc.StatusCode.INTERNAL — on long-lived streams INTERNAL is usually a
+    # transient RST_STREAM/connection reset, i.e. exactly the routine disconnect
+    # you want to retry. Treating it as fatal kills the sink on reconnect.
 }
 
 
@@ -266,6 +280,13 @@ def run_with_reconnection(
     attempt = 0
     max_retries = -1  # -1 for infinite retries
 
+    def on_block() -> None:
+        # Reset backoff once the stream is healthy again. Without this, a sink
+        # that reconnects occasionally over days converges on the 45s max delay
+        # permanently, because `attempt` only ever grows.
+        nonlocal attempt
+        attempt = 0
+
     while True:
         try:
             cursor = load_cursor()
@@ -277,6 +298,7 @@ def run_with_reconnection(
                 start_block=start_block,
                 stop_block=stop_block,
                 cursor=cursor,
+                on_block=on_block,
             )
             print("Stream completed successfully")
             break
@@ -309,6 +331,7 @@ def stream_blocks(
     start_block: int,
     stop_block: int,
     cursor: Optional[str] = None,
+    on_block: Optional[Callable[[], None]] = None,
 ) -> None:
     """Stream blocks from Substreams endpoint."""
 
@@ -337,6 +360,8 @@ def stream_blocks(
 
         for response in stream:
             handle_response(response, module)
+            if on_block is not None:
+                on_block()  # signals the stream is healthy — resets backoff
 ```
 
 ## Response Handling
@@ -355,7 +380,16 @@ def handle_response(response, module: str) -> None:
     elif message_type == "progress":
         handle_progress(response.progress)
 
-    # Other message types: session_init, debug_snapshot_data, debug_snapshot_complete
+    elif message_type == "fatal_error":
+        # A server-side module panic arrives here. Without this branch the loop
+        # just ends and the sink reports "completed successfully" having written
+        # nothing. Never treat a clean stream end as proof of success.
+        err = response.fatal_error
+        raise RuntimeError(f"fatal error in module {err.module}: {err.reason}")
+
+    # Full oneof member list: session, progress, block_scoped_data,
+    # block_undo_signal, fatal_error, debug_snapshot_data, debug_snapshot_complete
+    # (the field is `session`, of type SessionInit — there is no `session_init`)
 
 
 def handle_block_scoped_data(data, module: str) -> None:
@@ -403,9 +437,10 @@ def handle_block_undo_signal(signal) -> None:
 
 def handle_progress(progress) -> None:
     """Handle progress messages (optional)."""
-    # Progress contains module execution stages
-    for stage in progress.running_jobs:
-        print(f"Progress: stage {stage.stage}, {stage.processed_blocks} blocks")
+    # running_jobs yields Job messages (ModulesProgress also has a separate
+    # `stages` field — don't confuse the two).
+    for job in progress.running_jobs:
+        print(f"Progress: stage {job.stage}, {job.processed_blocks} blocks")
 
 
 def rewind_data(to_block: int) -> None:
@@ -436,7 +471,7 @@ import time
 import random
 import requests
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 from contextlib import contextmanager
 from enum import Enum
 
@@ -465,7 +500,9 @@ class ErrorType(Enum):
 FATAL_CODES = {
     grpc.StatusCode.UNAUTHENTICATED,
     grpc.StatusCode.INVALID_ARGUMENT,
-    grpc.StatusCode.INTERNAL,
+    # NOT grpc.StatusCode.INTERNAL — on long-lived streams INTERNAL is usually a
+    # transient RST_STREAM/connection reset, i.e. exactly the routine disconnect
+    # you want to retry. Treating it as fatal kills the sink on reconnect.
 }
 
 
@@ -553,6 +590,7 @@ def stream_blocks(
     package: package_pb2.Package,
     module: str,
     cursor: Optional[str],
+    on_block: Optional[Callable[[], None]] = None,
 ) -> None:
     """Stream and process blocks."""
     request = service_pb2.Request(
@@ -580,8 +618,14 @@ def stream_blocks(
 
             if msg_type == "block_scoped_data":
                 handle_block_scoped_data(response.block_scoped_data, module)
+                if on_block is not None:
+                    on_block()
             elif msg_type == "block_undo_signal":
                 handle_block_undo_signal(response.block_undo_signal)
+            elif msg_type == "fatal_error":
+                # Server-side module failure — must not fall through as success
+                err = response.fatal_error
+                raise RuntimeError(f"fatal error in module {err.module}: {err.reason}")
             elif msg_type == "progress":
                 pass  # Optional: log progress
 
@@ -611,10 +655,14 @@ def main():
     package = load_package(SPKG)
     attempt = 0
 
+    def on_block() -> None:
+        nonlocal attempt
+        attempt = 0  # stream is healthy again — reset backoff
+
     while True:
         try:
             cursor = load_cursor()
-            stream_blocks(ENDPOINT, token, package, MODULE, cursor)
+            stream_blocks(ENDPOINT, token, package, MODULE, cursor, on_block=on_block)
             print("Stream completed")
             break
 

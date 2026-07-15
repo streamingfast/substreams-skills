@@ -13,13 +13,20 @@ JavaScript is a good choice for:
 
 ## Installation
 
+**Pin the versions.** Installing these unpinned fails outright:
+
 ```bash
 # Node.js
-npm install @substreams/core @connectrpc/connect-node @connectrpc/connect
+npm install @substreams/core@0.16.0 @connectrpc/connect@1.3.0 @connectrpc/connect-node@1.3.0
 
 # Browser
-npm install @substreams/core @connectrpc/connect-web @connectrpc/connect
+npm install @substreams/core@0.16.0 @connectrpc/connect@1.4.0 @connectrpc/connect-web@1.4.0
 ```
+
+`npm install @substreams/core @connectrpc/connect-node @connectrpc/connect` (unpinned) errors with
+`ERESOLVE ... Conflicting peer dependency: @bufbuild/protobuf@1.x`: `@connectrpc/connect` 2.x peers
+`@bufbuild/protobuf` ^2, while `@substreams/core` still peers ^1. Stay on connect 1.x until
+`@substreams/core` bumps its peer.
 
 ## Key Dependencies
 
@@ -37,13 +44,13 @@ Pin versions that match [substreams-sink-examples](https://github.com/streamingf
 }
 ```
 
-**Browser:**
+**Browser:** (the official web example pins connect 1.4.0; the node example pins 1.3.0)
 ```json
 {
   "dependencies": {
     "@substreams/core": "0.16.0",
-    "@connectrpc/connect-web": "1.3.0",
-    "@connectrpc/connect": "1.3.0"
+    "@connectrpc/connect-web": "1.4.0",
+    "@connectrpc/connect": "1.4.0"
   },
   "type": "module"
 }
@@ -73,7 +80,10 @@ const TOKEN = process.env.SUBSTREAMS_API_TOKEN; // prefer pre-issued JWT when av
 const ENDPOINT = "https://mainnet.eth.streamingfast.io:443";
 const SPKG = "https://spkg.io/streamingfast/substreams-eth-block-meta-v0.4.3.spkg";
 const MODULE = "db_out";
-const START_BLOCK = '17000000';
+// startBlockNum is typed `number | bigint` — a string works at runtime (it is
+// passed through BigInt()) but is a type error for TypeScript users.
+// stopBlockNum DOES accept the `+N` relative string.
+const START_BLOCK = 17000000n;
 const STOP_BLOCK = '+1000';
 
 const main = async () => {
@@ -148,6 +158,14 @@ export const handleResponse = async (message, registry) => {
         case "progress":
             handleProgress(message.value);
             break;
+
+        // Do NOT omit this: a server-side module failure arrives here, and
+        // without a branch it falls through and the stream ends "cleanly".
+        // Fields are `module` / `reason` / `logs` — there is no `.msg`.
+        case "fatalError":
+            throw new Error(
+                `fatal error in module ${message.value.module}: ${message.value.reason}`
+            );
     }
 };
 
@@ -179,7 +197,10 @@ const handleBlockUndoSignal = async (signal) => {
     const lastValidBlock = signal.lastValidBlock;
     const lastValidCursor = signal.lastValidCursor;
 
-    const lastValidNum = lastValidBlock?.num ?? lastValidBlock?.number;
+    // BlockRef declares exactly two fields: `id` and `number` (bigint).
+    // There is no `.num` — the official examples' `lastValidBlock.num` is an
+    // upstream bug that silently prints `undefined`.
+    const lastValidNum = lastValidBlock?.number;
     console.log(`Reorg: rewinding to block #${lastValidNum}`);
 
     // 1. Revert data for blocks > lastValidNum
@@ -267,7 +288,8 @@ import { Code } from '@connectrpc/connect';
 const FATAL_ERRORS = [
     Code.Unauthenticated,  // Invalid/expired token
     Code.InvalidArgument,  // Bad request parameters
-    Code.Internal,         // Server bug
+    // NOT Code.Internal — on long-lived streams that is normally a transient
+    // RST_STREAM/reset, i.e. the routine disconnect you want to ride out.
 ];
 
 // Application-level errors
@@ -440,17 +462,28 @@ const getCursor = async () => {
 };
 
 const writeCursor = async (cursor) => {
-    await fs.promises.writeFile(CURSOR_FILE, cursor);
+    try {
+        await fs.promises.writeFile(CURSOR_FILE, cursor);
+    } catch (e) {
+        // Must throw the sentinel isRetryable() tests for — a raw fs error
+        // (disk full, permissions) would otherwise be classified retryable and
+        // loop forever without ever committing a cursor.
+        throw new Error("COULD_NOT_COMMIT_CURSOR", { cause: e });
+    }
 };
 
-// Error handling
-const FATAL_ERRORS = [Code.Unauthenticated, Code.InvalidArgument, Code.Internal];
+// Error handling. Code.Internal is NOT fatal: on long-lived streams it is
+// usually a transient RST_STREAM, i.e. the disconnect you want to retry.
+const FATAL_ERRORS = [Code.Unauthenticated, Code.InvalidArgument];
+
+// Local sentinels that must not be retried — retrying either would spin forever.
+const FATAL_MESSAGES = ['COULD_NOT_COMMIT_CURSOR', 'EMPTY_STREAM'];
 
 const isRetryable = (e) => {
     if (e.constructor.name === 'ConnectError') {
         return !FATAL_ERRORS.includes(e.code);
     }
-    return e.message !== 'CURSOR_ERROR';
+    return !FATAL_MESSAGES.includes(e.message);
 };
 
 // Backoff
@@ -490,6 +523,7 @@ const main = async () => {
                 startCursor: cursor ?? undefined,
             });
 
+            let blockCount = 0;
             for await (const response of streamBlocks(transport, request)) {
                 const msg = response.message;
 
@@ -499,7 +533,7 @@ const main = async () => {
 
                     if (output) {
                         const message = output.unpack(registry);
-                        const blockNum = data.clock.number;
+                        const blockNum = data.clock?.number;
 
                         // Process your data
                         console.log(`Block #${blockNum}: ${message ? 'data received' : 'empty'}`);
@@ -508,22 +542,34 @@ const main = async () => {
                         await writeCursor(data.cursor);
                         resetBackoff();
                     }
+                    blockCount++;
                 } else if (msg.case === 'blockUndoSignal') {
                     const signal = msg.value;
-                    // Official examples use .num; proto field is "number" — check both if needed
-                    const lastValid = signal.lastValidBlock?.num ?? signal.lastValidBlock?.number;
+                    const lastValid = signal.lastValidBlock?.number; // no `.num` field exists
                     console.log(`Reorg: rewind to block #${lastValid}`);
 
                     // Implement your rewind logic here
                     // ...
 
                     await writeCursor(signal.lastValidCursor);
+                } else if (msg.case === 'fatalError') {
+                    throw new Error(
+                        `fatal error in module ${msg.value.module}: ${msg.value.reason}`
+                    );
                 } else if (msg.case === 'progress') {
                     // Optional: log progress
                 }
             }
 
-            console.log('Stream completed successfully');
+            // A clean exit is not proof of success. On createGrpcTransport an
+            // invalid token yields ZERO messages and ends normally — the
+            // Code.Unauthenticated branch above is never reached. Assert progress.
+            if (blockCount === 0) {
+                console.error('Stream ended with 0 blocks — usually an invalid SUBSTREAMS_API_TOKEN.');
+                throw new Error('EMPTY_STREAM');
+            }
+
+            console.log(`Stream completed successfully (${blockCount} blocks)`);
             break;
 
         } catch (e) {
@@ -544,13 +590,14 @@ main().catch(console.error);
 ## Best Practices
 
 1. **Always use production mode** - Set `productionMode: true` for sinks
-2. **Handle all message types** - `blockScopedData`, `blockUndoSignal`, `progress`
-3. **Persist cursor after processing** - Never before, never skip
-4. **Implement exponential backoff** - With max delay and jitter
-5. **Classify errors correctly** - Fatal vs retryable
-6. **Reset backoff on success** - When data is received successfully
-7. **Handle BigInt serialization** - Add toJSON method or custom replacer
-8. **Use environment variables** - For configuration (API key, endpoint, etc.)
+2. **Handle all message types** - `blockScopedData`, `blockUndoSignal`, `progress`, and **`fatalError`** (omitting `fatalError` turns a server-side module panic into a silent clean exit)
+3. **Never treat a clean stream end as success** - assert you actually processed blocks; on `createGrpcTransport` a bad token ends the stream with zero messages and no error
+4. **Persist cursor after processing** - Never before, never skip
+5. **Implement exponential backoff** - With max delay and jitter
+6. **Classify errors correctly** - Fatal vs retryable (`Code.Internal` is retryable)
+7. **Reset backoff on success** - When data is received successfully
+8. **Handle BigInt serialization** - Add toJSON method or custom replacer
+9. **Use environment variables** - For configuration (API key, endpoint, etc.)
 
 ## Troubleshooting
 
@@ -558,12 +605,14 @@ main().catch(console.error);
 - Verify API key is set: `process.env.SUBSTREAMS_API_KEY`
 - Check token hasn't expired
 - Try re-issuing token with `authIssue()`
+- Note: on `createGrpcTransport` you will usually **not** see this error at all — a bad token ends the stream cleanly with zero blocks instead (see "No data received")
 
 **"Failed to unpack" error:**
 - Ensure registry is created from the same package
 - Verify output module name is correct
 
-**No data received:**
+**No data received / stream exits cleanly with 0 blocks:**
+- **Most often a bad token.** `createGrpcTransport` swallows the trailing `Unauthenticated` and simply ends the stream. Re-run with `createConnectTransport` to surface the real `ConnectError` — this diagnostic works reliably.
 - Check block range contains data
 - Verify module name matches the package
 - Try a known-good block range first
@@ -571,7 +620,7 @@ main().catch(console.error);
 **Connection drops frequently:**
 - Implement proper retry loop with backoff
 - Check network stability
-- Consider using `final_blocks_only` for less time-sensitive sinks
+- Consider passing `finalBlocksOnly: true` to `createRequest` for less time-sensitive sinks (the proto field is `final_blocks_only`; the JS option is camelCase)
 
 **Browser CORS errors:**
 - Use a backend proxy for the Substreams endpoint

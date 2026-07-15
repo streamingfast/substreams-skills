@@ -40,7 +40,9 @@ prost-types = "0.13"
 tokio-retry = "0.3"
 
 # Async streams
-futures03 = "0.3.1"
+# NOTE: this is a RENAMED dependency — there is no `futures03` crate on crates.io.
+# The `package = "futures"` key is what makes `use futures03::...` resolve.
+futures03 = { version = "0.3.1", package = "futures", features = ["compat"] }
 async-stream = "0.3"
 
 # HTTP for package fetching
@@ -69,22 +71,38 @@ my-sink/
 │   ├── substreams.rs     # Endpoint configuration
 │   ├── substreams_stream.rs  # Stream wrapper with reconnection
 │   └── pb/
-│       └── mod.rs        # Generated protobuf code
+│       ├── mod.rs        # Hand-written: `include!("pb.rs")` + trait impls
+│       └── pb.rs         # Generated module tree (neoeinstein-prost-crate)
 └── buf.gen.yaml
 ```
+
+`substreams.rs` and `substreams_stream.rs` are vendored from [substreams-sink-examples](https://github.com/streamingfast/substreams-sink-examples/tree/develop/rust) — they are local modules, not crates. Toolchain: the example pins `channel = "1.80"` in `rust-toolchain.toml`.
 
 ## Protobuf Generation
 
 ```yaml
 # buf.gen.yaml
 version: v1
+managed:
+  enabled: true
 plugins:
-  - plugin: buf.build/community/neoeinstein-prost
+  - plugin: buf.build/community/neoeinstein-prost:v0.4.0
+    out: src/pb
+    opt: file_descriptor_set=false
+
+  - plugin: buf.build/community/neoeinstein-tonic:v0.4.1
     out: src/pb
     opt:
-      - compile_well_known_types
-  - plugin: buf.build/community/neoeinstein-tonic
+      - no_server=true
+
+  # Required: emits src/pb/pb.rs, the `pub mod sf { pub mod substreams { ... } }`
+  # tree that every `crate::pb::sf::substreams::...` path depends on. Without it
+  # the other two plugins emit flat, unwired files and nothing resolves.
+  - plugin: buf.build/community/neoeinstein-prost-crate:v0.4.1
     out: src/pb
+    opt:
+      - include_file=pb.rs
+      - no_features
 ```
 
 ```bash
@@ -103,70 +121,105 @@ Handles gRPC connection setup with TLS and authentication:
 
 ```rust
 // src/substreams.rs
-use anyhow::Error;
-use tonic::transport::{Channel, ClientTlsConfig, Uri};
-use tonic::{metadata::MetadataValue, Request};
+use std::{fmt::Display, sync::Arc, time::Duration};
 
-use crate::pb::sf::substreams::rpc::v3::stream_client::StreamClient;
+use http::{uri::Scheme, Uri};
+use tonic::{
+    codec::CompressionEncoding,
+    codegen::http,
+    metadata::MetadataValue,
+    transport::{Channel, ClientTlsConfig},
+};
 
+use crate::pb::sf::substreams::rpc::v2::Response;
+use crate::pb::sf::substreams::rpc::v3::{stream_client::StreamClient, Request};
+
+#[derive(Clone, Debug)]
 pub struct SubstreamsEndpoint {
     pub uri: String,
     pub token: Option<String>,
+    pub api_key: Option<String>,
     channel: Channel,
 }
 
+impl Display for SubstreamsEndpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(self.uri.as_str(), f)
+    }
+}
+
 impl SubstreamsEndpoint {
-    pub async fn new(url: &str, token: Option<String>) -> Result<Self, Error> {
-        let uri = url.parse::<Uri>()?;
+    pub async fn new<S: AsRef<str>>(
+        url: S,
+        token: Option<String>,
+        api_key: Option<String>,
+    ) -> Result<Self, anyhow::Error> {
+        let uri = url.as_ref().parse::<Uri>()?;
 
-        let channel = match uri.scheme_str() {
-            Some("http") => Channel::builder(uri).connect().await?,
-            _ => {
-                // HTTPS by default
-                let tls_config = ClientTlsConfig::new()
-                    .with_native_roots();
-                Channel::builder(uri)
-                    .tls_config(tls_config)?
-                    .connect()
-                    .await?
-            }
-        };
+        let endpoint = match uri.scheme().unwrap_or(&Scheme::HTTP).as_str() {
+            "http" => Channel::builder(uri),
+            "https" => Channel::builder(uri)
+                .tls_config(ClientTlsConfig::new().with_native_roots())
+                .expect("TLS config on this host is invalid"),
+            _ => panic!("invalid uri scheme for firehose endpoint"),
+        }
+        .connect_timeout(Duration::from_secs(10))
+        .tcp_keepalive(Some(Duration::from_secs(30)));
 
-        Ok(Self {
-            uri: url.to_string(),
-            token,
-            channel,
-        })
+        let uri = endpoint.uri().to_string();
+        // connect_lazy, NOT connect().await — the endpoint is built once at
+        // startup, so an eager connect makes a momentarily-down endpoint a hard
+        // startup failure and the reconnect loop never gets a chance to run.
+        let channel = endpoint.connect_lazy();
+
+        Ok(SubstreamsEndpoint { uri, channel, token, api_key })
     }
 
     pub async fn substreams(
         self: Arc<Self>,
-        request: crate::pb::sf::substreams::rpc::v3::Request,
-    ) -> Result<tonic::Streaming<crate::pb::sf::substreams::rpc::v2::Response>, Error> {
-        let mut client = StreamClient::new(self.channel.clone())
-            .accept_compressed(tonic::codec::CompressionEncoding::Gzip)
-            .send_compressed(tonic::codec::CompressionEncoding::Gzip);
+        request: Request,
+    ) -> Result<tonic::Streaming<Response>, anyhow::Error> {
+        // NOTE: the token is sent RAW — do NOT prepend "Bearer ".
+        let token_metadata: Option<MetadataValue<tonic::metadata::Ascii>> =
+            match self.token.clone() {
+                Some(token) => Some(token.as_str().try_into()?),
+                None => None,
+            };
 
-        let mut req = Request::new(request);
+        let api_key_metadata: Option<MetadataValue<tonic::metadata::Ascii>> =
+            match self.api_key.clone() {
+                Some(api_key) => Some(api_key.as_str().try_into()?),
+                None => None,
+            };
 
-        // Add authentication header
-        if let Some(token) = &self.token {
-            let bearer = format!("Bearer {}", token);
-            req.metadata_mut().insert(
-                "authorization",
-                MetadataValue::try_from(&bearer)?,
-            );
-        }
+        let mut client = StreamClient::with_interceptor(
+            self.channel.clone(),
+            move |mut r: tonic::Request<()>| {
+                if let Some(ref t) = token_metadata {
+                    r.metadata_mut().insert("authorization", t.clone());
+                }
+                if let Some(ref k) = api_key_metadata {
+                    r.metadata_mut().insert("x-api-key", k.clone());
+                }
+                Ok(r)
+            },
+        )
+        .accept_compressed(CompressionEncoding::Gzip)
+        .send_compressed(CompressionEncoding::Gzip)
+        // tonic defaults to a 4 MB decode cap; Substreams blocks routinely exceed it.
+        .max_decoding_message_size(10 * 1024 * 1024);
 
-        let response = client.blocks(req).await?;
-        Ok(response.into_inner())
+        let response_stream = client.blocks(request).await?;
+        Ok(response_stream.into_inner())
     }
 }
+```
 
-impl std::fmt::Display for SubstreamsEndpoint {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.uri)
-    }
+Auth: pass `SUBSTREAMS_API_TOKEN` as `token` (sent raw as `authorization`) and/or `SUBSTREAMS_API_KEY` as `api_key` (sent as `x-api-key`). Endpoints must carry a scheme — normalize before constructing:
+
+```rust
+if !endpoint_url.starts_with("http") {
+    endpoint_url = format!("https://{}", &endpoint_url);
 }
 ```
 
@@ -265,15 +318,22 @@ fn stream_blocks(
                                 backoff = ExponentialBackoff::from_millis(500)
                                     .max_delay(Duration::from_secs(45));
 
-                                latest_cursor = data.cursor.clone();
+                                // Advance `latest_cursor` only AFTER the yield:
+                                // `yield` suspends until the consumer has processed
+                                // the block. Assigning before it means a mid-block
+                                // consumer error + reconnect resumes PAST a block
+                                // that was never processed (violates Rule #1).
+                                let cursor = data.cursor.clone();
                                 yield BlockResponse::New(data);
+                                latest_cursor = cursor;
                             }
                             ProcessResult::BlockUndoSignal(signal) => {
                                 backoff = ExponentialBackoff::from_millis(500)
                                     .max_delay(Duration::from_secs(45));
 
-                                latest_cursor = signal.last_valid_cursor.clone();
+                                let cursor = signal.last_valid_cursor.clone();
                                 yield BlockResponse::Undo(signal);
+                                latest_cursor = cursor;
                             }
                             ProcessResult::Skip => {}
                             ProcessResult::Error(status) => {
@@ -547,22 +607,18 @@ fn process_block(data: &BlockScopedData) -> Result<(), Error> {
 ```bash
 # Basic usage
 SUBSTREAMS_API_TOKEN="your-token" cargo run -- \
-    mainnet.eth.streamingfast.io:443 \
+    https://mainnet.eth.streamingfast.io:443 \
     https://spkg.io/streamingfast/substreams-eth-block-meta-v0.4.3.spkg \
     db_out
-
-# With block range
-cargo run -- endpoint spkg module 17000000:17001000
-
-# Live streaming (no stop block)
-cargo run -- endpoint spkg module 17000000:
-
-# From chain head
-cargo run -- endpoint spkg module -1:
-
-# With module parameters
-cargo run -- endpoint spkg module --params="map_events:(type:transfer)"
 ```
+
+> **The `main.rs` above is trimmed**: it reads only the three positional args and
+> hardcodes `start_block`/`stop_block` to `0`. It has **no** block-range or
+> `--params` parsing — pass a range and it is silently ignored, streaming from 0.
+> The full [example](https://github.com/streamingfast/substreams-sink-examples/tree/develop/rust)
+> implements `read_block_range` / `read_params_flag` (needing `regex`, `semver`,
+> `lazy_static`) and supports `17000000:17001000`, `17000000:`, `-1:`, and
+> `--params="map_events:(type:transfer)"`. Copy those in if you need them.
 
 ## Final Blocks Only Mode
 
@@ -576,7 +632,7 @@ let result = endpoint.clone().substreams(Request {
 }).await;
 ```
 
-This delays data by ~2-3 minutes but eliminates the need for undo handling.
+This lags the chain tip by that chain's finality distance — ~13 minutes on Ethereum mainnet (2 epochs), ~seconds on Solana — but eliminates the need for undo handling.
 
 ## Best Practices
 
@@ -591,9 +647,15 @@ This delays data by ~2-3 minutes but eliminates the need for undo handling.
 ## Troubleshooting
 
 **"Unauthenticated" error:**
-- Check `SUBSTREAMS_API_TOKEN` environment variable
+- Check `SUBSTREAMS_API_TOKEN` (sent as `authorization`) or `SUBSTREAMS_API_KEY` (sent as `x-api-key`)
 - Verify token hasn't expired
-- Ensure Bearer prefix is added correctly
+- Do **not** prepend a `Bearer ` prefix — the token is sent raw
+
+**"message length too large" / decode errors:**
+- tonic caps decoding at 4 MB by default; set `.max_decoding_message_size(10 * 1024 * 1024)`
+
+**`error: no matching package named 'futures03' found`:**
+- `futures03` is a *renamed* dependency — it needs `package = "futures"` in `Cargo.toml`
 
 **Connection drops:**
 - This is normal for long-running streams

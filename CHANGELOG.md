@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `substreams-sink-deploy-local` (v2.1.0): correct live CLI facts — remove non-existent `generate`/`undo` and invented `--workers`; document `run <dsn> <manifest> [range]` (module from `sink:`), `tools cursor delete`, hand-written `schema.sql`, from-proto ops path, webhook/protojson signatures (`state.cursor`), and metrics default `localhost:9102`.
 - `substreams-dev` (v1.3.1): short registry form `name@version` and `@latest` do not resolve via the CLI (rewrites to `substreams.dev/v1/packages/...` HTML 404) — prefer `https://spkg.io/v1/packages/<slug>/<version>` for `imports:`, `substreams run`/`info`, and head-block lookup; document relative `-t` + `-s -1` limitation.
 - `substreams-dev`: package metadata example used unprefixed `version: 1.3.0` (must be `v`-prefixed); update Solana crate guidance to `0.15`; clarify `substreams-entity-change` v2 still pins `substreams ^0.6` so graph_out should keep inlining EntityChanges.
 - `portal-api` (v1.16.1): upgrade/downgrade rubric compared `total_cents` to `base_price × 100` even though both fields are already integer cents — compare cents directly.

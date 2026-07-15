@@ -12,7 +12,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.0.1
+  version: 1.0.2
   author: StreamingFast
   documentation: https://docs.substreams.dev/how-to-guides/develop-your-own-substreams/ethereum
 ---
@@ -159,15 +159,11 @@ prost = "0.13"
 prost-types = "0.13"
 hex = "0.4"
 hex-literal = "0.4"          # hyphen in Cargo.toml, underscore in `use hex_literal::hex`
-ethabi = "18"                # raw decoding without generated bindings
+ethabi = "17"                # REQUIRED on the Abigen path (see below) — must be 17, not 18
 
 [build-dependencies]
 substreams-ethereum = "0.11" # REQUIRED for Abigen in build.rs
 prost-build = "0.13"
-
-# ethabi pulls getrandom; register a no-op RNG for wasm (crate docs)
-[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
-getrandom = { version = "0.2", features = ["custom"] }
 
 [lib]
 crate-type = ["cdylib"]
@@ -178,7 +174,13 @@ opt-level = "s"
 strip = "debuginfo"
 ```
 
-`substreams-ethereum` must be in **both** `[dependencies]` and `[build-dependencies]` when using `Abigen`. Call `substreams_ethereum::init!();` once at the top of `lib.rs` so getrandom is registered under `wasm32-unknown-unknown`.
+`substreams-ethereum` must be in **both** `[dependencies]` and `[build-dependencies]` when using `Abigen`.
+
+**`ethabi` is required on the Abigen path — and must be `17`, not `18`.** Abigen writes bare `ethabi::ParamType` / `ethabi::Token` paths into the file it generates in **your** crate, and `substreams-ethereum` does **not** re-export `ethabi`, so it must be a direct dependency of yours or the generated module fails to resolve. (All three Abigen examples in this repo declare it; the hand-decoding ones — T1.2, T2.1, T6.1 — correctly do not.)
+
+Pin **`17`**: `substreams-ethereum-core` pins `ethabi 17`, so `"18"` still compiles but silently links a **second** copy of the whole stack (`ethabi`, `ethereum-types`, `primitive-types`, …) into the wasm binary, and its types are not interchangeable with the crate's. Bigger binary, no benefit.
+
+**`getrandom` and `init!()` are not required on 0.11.** The crate's own docs still say to add a `getrandom` dependency and call `substreams_ethereum::init!();` — that guidance is stale. `substreams-ethereum` already declares `getrandom = { features = ["custom"] }` for `wasm32-unknown-unknown` itself, and cargo unifies the feature. No example in this repo does either, and all build. Both are harmless if present, but `init!()` only registers a handler that *always returns an error* — it satisfies the linker, it does not provide randomness.
 
 ## build.rs (ABI codegen)
 
@@ -203,8 +205,24 @@ Create `src/abi/mod.rs` declaring each generated module (`pub mod uniswap_v3_poo
 specVersion: v0.1.0
 package:
   name: my_eth_substreams
-  version: v0.1.0
+  version: v0.1.0            # `v` prefix is mandatory
+  url: https://github.com/myorg/my-eth-substreams   # set both — silences build warnings
+  description: Decoded Uniswap V2 swaps on Ethereum mainnet
 network: mainnet
+
+protobuf:                    # REQUIRED — `substreams pack` fails without it
+  files:
+    - my_events.proto
+  importPaths:
+    - ./proto
+
+binaries:                    # REQUIRED — `substreams pack` fails without it
+  default:
+    type: wasm/rust-v1
+    # filename = Cargo.toml [package] name with hyphens → underscores,
+    # which is NOT necessarily the package.name above
+    file: ./target/wasm32-unknown-unknown/release/my_eth_substreams.wasm
+
 modules:
   - name: map_events
     kind: map
@@ -214,6 +232,8 @@ modules:
     output:
       type: proto:mypackage.v1.MyOutput
 ```
+
+`protobuf:` and `binaries:` are **not optional** — every working example in this repo carries both, and a manifest without them does not pack.
 
 `sf.ethereum.type.v2.Block` is a **well-known source** — no `imports:` entry is needed for the block type. (If you do import the eth spkg, it is `substreams-ethereum`, never `sf-ethereum`, which does not exist.)
 
@@ -361,7 +381,7 @@ After generators, still enforce the pre-flight event list and address filters.
 1. Pre-flight complete (network, contract, events, fields, enrichment, sink, blocks).
 2. Decoding path chosen (ABI / Solidity source / known signature).
 3. `network:` set for the target chain, input `sf.ethereum.type.v2.Block`, crate versions as above.
-4. `substreams-ethereum` in **both** `[dependencies]` and `[build-dependencies]` if using `Abigen`; `use substreams_ethereum::Event;`; `substreams_ethereum::init!();` in `lib.rs`.
+4. `substreams-ethereum` in **both** `[dependencies]` and `[build-dependencies]` if using `Abigen`; `use substreams_ethereum::Event;`. Store handlers also need `StoreNew` + the accessor trait in scope.
 5. Loop: `block.transactions()` + `logs_with_calls()` + address filter + topic0 filter; only requested events matched.
 6. **Decode** into **typed fields**, **one protobuf message type per event**; `uint256` → `BigInt` → decimal `string`; addresses/tx → **`0x` + lowercase hex** (not bare `Hex::encode`).
 7. Any RPC batched **and** cached in a `set_if_not_exists` store.
@@ -397,7 +417,10 @@ After generators, still enforce the pre-flight event list and address filters.
 | Very slow / RPC timeouts | Unbatched or uncached `eth_call` — batch + `set_if_not_exists` store |
 | spkg import 404 | Use `substreams-ethereum`, NOT `sf-ethereum` (doesn't exist); verify the release exists |
 | `hex_literal` unresolved | Cargo key is `hex-literal` (hyphen); `use hex_literal::hex` (underscore) |
-| `getrandom` / RNG panic in wasm | Add `getrandom` with `features = ["custom"]` and `substreams_ethereum::init!();` in `lib.rs` |
+| `getrandom` "not supported by default" on wasm32 | You pinned a stray `getrandom` **without** `features = ["custom"]`, or an old `substreams-ethereum`. On 0.11 the crate supplies this itself — remove your own `getrandom` dep rather than adding one |
+| `failed to resolve: use of undeclared crate 'ethabi'` in `src/abi/*.rs` | Abigen's generated code needs `ethabi` as **your** direct dependency — add `ethabi = "17"` |
+| Duplicate `ethabi` / `ethereum-types` in the build | You pinned `ethabi = "18"`; core pins `17`. Use `"17"` |
+| `cannot find function 'new' in ... Store` / `no method 'set_if_not_exists'` | Store handler missing `use substreams::store::StoreNew;` (the macro emits `::new()`) and the accessor trait |
 | ClickHouse `SYNTAX_ERROR` on `index` / `keys` | Rename columns in proto (`log_index`, `topic_keys`) — `substreams-sql` |
 
 ## Resources

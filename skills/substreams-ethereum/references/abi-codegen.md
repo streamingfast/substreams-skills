@@ -188,12 +188,17 @@ With `ethabi` for anything non-trivial (dynamic types, arrays, structs):
 
 ```rust
 use ethabi::{decode, ParamType};
+use substreams::errors::Error;   // alias for anyhow::Error — no extra dependency needed
 
 let decoded = decode(
     &[ParamType::Uint(256), ParamType::Uint(256)],
     &log.data,
-).map_err(|e| anyhow::anyhow!("decode failed: {e}"))?;
+).map_err(|e| Error::msg(format!("decode failed: {e}")))?;
 ```
+
+Requires `ethabi = "17"` in `Cargo.toml` — **not `18`**, which duplicates the stack `substreams-ethereum-core` already links (see SKILL.md). Don't reach for `anyhow::anyhow!` here unless you also declare `anyhow` yourself; `substreams::errors::Error` is already an `anyhow::Error` alias and needs no new dependency.
+
+Note `ethabi` is only optional on the **hand-decode** path — T6.1 rolls its own `uint256`→decimal conversion and declares no `ethabi`. On the **Abigen** path it is mandatory regardless of whether you call it yourself, because the generated module references it.
 
 ### Gotchas
 

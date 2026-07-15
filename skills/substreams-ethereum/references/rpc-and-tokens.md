@@ -111,9 +111,17 @@ The `HashSet` here is **correct** — it dedups within a single block. It is *no
 ```
 
 ```rust
+// These imports are load-bearing — the handler does not compile without them.
+// StoreNew: the #[handlers::store] macro expands to a `::new()` call.
+// StoreSetIfNotExists: provides `.set_if_not_exists()` (a trait method, not inherent).
+// Note the *Proto type lives in `prelude`, while the traits live in `store`.
+use substreams::prelude::StoreSetIfNotExistsProto;
+use substreams::store::{StoreNew, StoreSetIfNotExists};
+
 #[substreams::handlers::store]
 pub fn store_pool_tokens(pairs: PoolTokenPairs, store: StoreSetIfNotExistsProto<TokenPair>) {
     for entry in pairs.entries {
+        // ord is u64; value is passed by reference
         store.set_if_not_exists(0, &entry.pool, entry.tokens.as_ref().unwrap());
     }
 }
@@ -133,14 +141,30 @@ pub fn store_pool_tokens(pairs: PoolTokenPairs, store: StoreSetIfNotExistsProto<
 ```
 
 ```rust
+use substreams::store::{StoreGet, StoreGetProto};   // StoreGet provides `.get_last()`
+
 #[substreams::handlers::map]
 pub fn map_swaps(block: eth::Block, store: StoreGetProto<TokenPair>) -> Result<SwapEvents, Error> {
-    // Key must match what map_pool_tokens / store_pool_tokens wrote (same 0x policy).
-    let key = format!("0x{}", Hex::encode(&log.address));
-    let tokens = match store.get_last(&key) {
-        Some(t) => t,
-        None => continue,
-    };
+    let mut swaps = Vec::new();
+
+    for trx in block.transactions() {
+        for (log, _call) in trx.logs_with_calls() {
+            if log.topics.is_empty() || log.topics[0] != SWAP_TOPIC {
+                continue;
+            }
+
+            // Key must match what map_pool_tokens / store_pool_tokens wrote (same 0x policy).
+            let key = format!("0x{}", Hex::encode(&log.address));
+            let tokens = match store.get_last(&key) {
+                Some(t) => t,
+                None => continue,          // pool not resolved yet — skip
+            };
+
+            swaps.push(decode_swap(log, &tokens));
+        }
+    }
+
+    Ok(SwapEvents { swaps })
 }
 ```
 
@@ -174,7 +198,8 @@ let human = raw_amount.to_decimal(decimals as u64);
 
 * `uint256` **never** fits in `u64` (max ~1.8e19; a single 18-decimal token can exceed it). Use `BigInt`.
 * Emit as a decimal `string` in protobuf — proto3 has no 256-bit type, and `double` loses precision.
-* `substreams::scalar::BigInt` wraps `num_bigint::BigInt` — it is **arbitrary precision**, not 256-bit. Squaring `sqrtPriceX96` will not overflow it; T3.1 does exactly that in integer arithmetic. Reach for `BigDecimal` when you need fractional results, not to dodge an overflow that cannot happen.
+* `substreams::scalar::BigInt` wraps `num_bigint::BigInt` — it is **arbitrary precision**, not 256-bit. Squaring `sqrtPriceX96` will not overflow it. Reach for `BigDecimal` when you need fractional results, not to dodge an overflow that cannot happen.
+* If you drop to `num_bigint` directly (T3.1 does — it squares `sqrtPriceX96` as a `num_bigint::BigUint`), add `num-bigint = "0.4"` and `num-traits = "0.2"` to `Cargo.toml`; they are **not** transitively available through `substreams`. Staying on `substreams::scalar::BigInt` needs no extra dependency and is the simpler default.
 * Uniswap V3 price: `(sqrtPriceX96 / 2^96)^2 * 10^(decimals0 - decimals1)`. Watch the **sign** of V3's `int256` amounts and the `decimals0 - decimals1` exponent, which can be negative.
 
 ## Cost checklist

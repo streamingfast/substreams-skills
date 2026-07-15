@@ -11,7 +11,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.4.1
+  version: 1.4.2
   author: StreamingFast
   documentation: https://docs.substreams.dev/how-to-guides/develop-your-own-substreams/solana
 ---
@@ -421,7 +421,6 @@ After generators, still enforce pre-flight instruction list and account filters 
 * [Instruction parsing (IDL vs Rust)](./references/instruction-parsing.md)
 * [Loops, filters, indexes](./references/loops-and-filters.md)
 * [Common program IDs & SPL](./references/common-programs.md)
-* [Legacy notes in substreams-dev](../substreams-dev/references/solana.md)
 * [Solana docs](https://docs.substreams.dev/how-to-guides/develop-your-own-substreams/solana)
 * [substreams-solana crate](https://github.com/streamingfast/substreams-solana)
 * Cross-cutting: **`substreams-dev`** · SQL module: **`substreams-sql`** · Hosted sink: **`substreams-hosted-sink`** · Self-managed sink: **`substreams-sink-deploy-local`** · Testing: **`substreams-testing`**

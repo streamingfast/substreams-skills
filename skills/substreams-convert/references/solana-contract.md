@@ -434,4 +434,4 @@ substreams run ./substreams.yaml map_swaps \
 - [substreams-solana crate](https://crates.io/crates/substreams-solana)
 - [Anchor IDL reference](https://www.anchor-lang.com/docs/idl)
 - [Solana Program Library (SPL)](https://github.com/solana-labs/solana-program-library)
-- [Solana Substreams reference file](../../substreams-dev/references/solana.md)
+- **`substreams-solana` skill** — block access, `walk_instructions()`, SPL/Anchor decoding

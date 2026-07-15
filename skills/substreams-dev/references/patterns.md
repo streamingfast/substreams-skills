@@ -10,112 +10,11 @@ Collection of proven patterns and best practices for Substreams development.
 > use substreams::prelude::*;
 > use substreams::Hex;
 > use substreams_ethereum::pb::eth::v2::{Block, TransactionTrace};
-> use substreams_ethereum::Event;  // REQUIRED for .decode() on ABI-generated events
 > ```
 
-## Event Extraction Patterns
+## Event Extraction
 
-### Recommended: Using ABI Generator
-
-The best practice for event extraction is to use the ABI Generator with `substreams init`:
-
-```bash
-# Bootstrap a new project with ABI generation
-substreams init
-
-# This will generate typed Rust bindings from contract ABIs
-# See https://github.com/streamingfast/substreams-ethereum for details
-```
-
-**Required Import for ABI Decoding:**
-
-When using generated ABI bindings (from `build.rs`), you **must** import the `Event` trait to use `.decode()` or `.match_and_decode()` methods:
-
-```rust
-use substreams_ethereum::Event;  // Required for ABI event decoding
-```
-
-Without this import, you'll get errors like "no method named `decode` found for struct `OrderFilled`".
-
-Generated code example:
-```rust
-use substreams::prelude::*;
-use substreams_ethereum::pb::eth::v2::Block;
-use crate::abi::erc20::events::Transfer; // Generated from ABI
-
-#[substreams::handlers::map]
-pub fn map_transfers(block: Block) -> Result<Transfers, Error> {
-    let mut transfers = Transfers::default();
-    
-    for trx in block.transactions() {
-        for (log, _call) in trx.logs_with_calls() {
-            // Use generated ABI decoder
-            if let Some(transfer) = Transfer::match_and_decode(log) {
-                transfers.items.push(Transfer {
-                    tx_hash: Hex::encode(&trx.hash),
-                    from: transfer.from,
-                    to: transfer.to,
-                    amount: transfer.value.to_string(),
-                    token: Hex::encode(&log.address),
-                    block_num: block.number,
-                    block_time: block.timestamp_seconds(),
-                    log_index: log.index,
-                });
-            }
-        }
-    }
-    
-    Ok(transfers)
-}
-```
-
-### Multi-Event Extraction
-
-```rust
-#[substreams::handlers::map]
-pub fn map_dex_events(block: Block) -> Result<DexEvents, Error> {
-    let mut events = DexEvents::default();
-    
-    for trx in block.transactions() {
-        for (log, _call) in trx.logs_with_calls() {
-            match classify_event(log) {
-                EventType::UniswapV2Swap => {
-                    events.swaps.push(extract_uniswap_v2_swap(log, trx, &block));
-                }
-                EventType::UniswapV3Swap => {
-                    events.swaps.push(extract_uniswap_v3_swap(log, trx, &block));
-                }
-                EventType::Transfer => {
-                    events.transfers.push(extract_transfer(log, trx, &block));
-                }
-                EventType::Unknown => {} // Skip unknown events
-            }
-        }
-    }
-    
-    Ok(events)
-}
-
-enum EventType {
-    UniswapV2Swap,
-    UniswapV3Swap,
-    Transfer,
-    Unknown,
-}
-
-fn classify_event(log: &Log) -> EventType {
-    if log.topics.is_empty() {
-        return EventType::Unknown;
-    }
-    
-    match log.topics[0].as_slice() {
-        UNISWAP_V2_SWAP_SIGNATURE => EventType::UniswapV2Swap,
-        UNISWAP_V3_SWAP_SIGNATURE => EventType::UniswapV3Swap,
-        TRANSFER_SIGNATURE => EventType::Transfer,
-        _ => EventType::Unknown,
-    }
-}
-```
+Not owned by this skill. EVM event extraction — ABI codegen (`substreams init`, `build.rs`), the `use substreams_ethereum::Event;` trait import that `.match_and_decode()` requires, topic0 matching, and indexed-vs-non-indexed payload decoding — belongs to the **`substreams-ethereum`** skill (see its "Canonical loop" section and `references/abi-codegen.md`). For Solana instruction decoding use **`substreams-solana`**.
 
 ## Store Aggregation Patterns
 
@@ -408,32 +307,7 @@ fn get_active_contracts(
 
 ### Factory Pattern
 
-```rust
-#[substreams::handlers::store]
-pub fn store_factory_contracts(
-    events: FactoryEvents,
-    store: StoreSetString,
-) {
-    for event in events.items {
-        match event.event_type.as_str() {
-            "PairCreated" => {
-                let pair_address = event.pair_address;
-                let key = format!("pair:{}", pair_address);
-                
-                let pair_info = PairInfo {
-                    token0: event.token0,
-                    token1: event.token1,
-                    created_at: event.block_num,
-                };
-                
-                let serialized = serde_json::to_string(&pair_info).unwrap();
-                store.set(0, &key, &serialized);
-            }
-            _ => {}
-        }
-    }
-}
-```
+Populating the registry store that the pattern above reads from: see [Factory Contract Pattern](#factory-contract-pattern).
 
 ## Error Handling Patterns
 
@@ -553,90 +427,12 @@ pub fn store_batch_updates(
 }
 ```
 
-## Database Sink Patterns
+## Database Sinks
 
-### Pushing Aggregations Into the Sink
+Not owned by this skill. The `db_out` module, the `Tables` API from `substreams-database-change`, and Database Changes (CDC, Postgres only) vs From-proto (all ClickHouse) mode selection belong to the **`substreams-sql`** skill.
 
-A common challenge in blockchain data processing is computing chain-wide aggregations — counters, running totals, min/max tracking, OHLC candles, etc. While Substreams **store modules** can accumulate state, they introduce complexity: stores must be fully replayed from their initial block, they increase module dependencies, and they require careful handling of parallel execution.
+Worth knowing when designing the graph above: `substreams-sink-sql` supports **delta operations** (`add`, `max`, `min`, …) applied atomically by the database, which can replace store modules for many chain-wide aggregations — no replay from initial block, no read-modify-write, no store dependency. Weigh that against the store patterns above before adding a store.
 
-A powerful alternative is to **push aggregation logic directly into the database sink**. Instead of computing aggregates in Substreams stores, you emit delta operations (add, max, min, set_if_null, etc.) that the sink applies atomically at the database level. This approach:
+## Testing
 
-- **Eliminates store modules** for many aggregation use cases, simplifying your module graph
-- **Avoids read-modify-write cycles** — deltas are applied atomically by the database
-- **Enables parallel processing** — independent delta operations don't conflict
-- **Simplifies reorg handling** — the sink manages undo operations automatically
-
-The `substreams-sink-sql` sink has first-class support for delta operations, making it an excellent candidate for chain-wide aggregations. See the SQL skill documentation for detailed patterns, API reference, and examples.
-
-### DatabaseChanges Output Module
-
-Modules that output to a database sink use the `DatabaseChanges` protobuf type and the `Tables` API from the `substreams-database-change` crate:
-
-```rust
-use substreams_database_change::tables::Tables;
-use substreams_database_change::pb::sf::substreams::sink::database::v1::DatabaseChanges;
-
-#[substreams::handlers::map]
-fn db_out(events: Events) -> Result<DatabaseChanges, substreams::errors::Error> {
-    let mut tables = Tables::new();
-
-    for event in &events.items {
-        tables.create_row("my_table", &event.id)
-            .set("column1", &event.value1)
-            .set("column2", &event.value2);
-    }
-
-    Ok(tables.to_database_changes())
-}
-```
-
-**Important Notes:**
-- The correct import path is `substreams_database_change::pb::sf::substreams::sink::database::v1::DatabaseChanges` (not the deprecated `pb::database::DatabaseChanges`)
-- Ordinals are automatically managed by the `Tables` struct — no manual management needed
-- Cargo dependency: `substreams-database-change = "4"` (latest: 4.0.0)
-
-## Testing Patterns
-
-### Mock Data Generation
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    fn create_test_block() -> Block {
-        let mut block = Block::default();
-        block.number = 17000000;
-        block.timestamp = Some(prost_types::Timestamp {
-            seconds: 1681234567,
-            nanos: 0,
-        });
-        
-        // Add test transactions
-        block.transaction_traces.push(create_test_transaction());
-        
-        block
-    }
-    
-    fn create_test_transaction() -> TransactionTrace {
-        let mut trx = TransactionTrace::default();
-        trx.hash = vec![0x12; 32];
-        
-        // Add test logs
-        let mut receipt = substreams_ethereum::pb::eth::v2::TransactionReceipt::default();
-        receipt.logs.push(create_transfer_log());
-        trx.receipt = Some(receipt);
-        
-        trx
-    }
-    
-    #[test]
-    fn test_transfer_extraction() {
-        let block = create_test_block();
-        let result = map_transfers(block).unwrap();
-        
-        assert_eq!(result.items.len(), 1);
-        assert_eq!(result.items[0].amount, "1000000000000000000");
-    }
-}
-```
+Not owned by this skill. Unit tests via `substreams::testing` (`map!`, `clock`), real block fixtures through firecore, `substreams run` / `--test-file` integration and golden checks, and CI patterns belong to the **`substreams-testing`** skill. Note it prefers **real protobuf block fixtures** over hand-rolled mock blocks, and that there is no official store mock.

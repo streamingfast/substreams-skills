@@ -8,7 +8,7 @@ Use for slot stats, failure rates, compute-unit totals.
 
 ```rust
 for tx in &block.transactions {
-    let is_failed = tx.meta.as_ref().map(|m| m.err.is_some()).unwrap_or(true);
+    let is_failed = tx.meta.as_ref().map(|m| m.err.is_some()).unwrap_or(false);
     let compute = tx
         .meta
         .as_ref()

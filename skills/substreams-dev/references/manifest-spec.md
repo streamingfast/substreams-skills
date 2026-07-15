@@ -89,17 +89,19 @@ imports:
 
 Imported packages make their protobuf types and modules available for use in your manifest. See sink-specific documentation for required imports.
 
-### Common Ethereum Imports
+### Common Imports
 
-For Ethereum Substreams, use the `substreams-ethereum` spkg (NOT `sf-ethereum` which doesn't exist):
+`sf.ethereum.type.v2.Block` is a **well-known source** — it needs NO `imports:`
+entry. An Ethereum Substreams that only consumes blocks has no `imports:` section
+at all. (If you do import the eth spkg, it is `substreams-ethereum`, never
+`sf-ethereum`, which does not exist.)
+
+Sinks are the common reason to import. For SQL sinks:
 
 ```yaml
 imports:
-  # Ethereum block types - REQUIRED for Ethereum chains
-  eth: https://github.com/streamingfast/substreams-ethereum/releases/download/v0.11.1/substreams-ethereum-v0.11.1.spkg
-
-  # For SQL sinks - provides DatabaseChanges protobuf type
-  database: https://github.com/streamingfast/substreams-sink-database-changes/releases/download/v3.0.0/substreams-sink-database-changes-v3.0.0.spkg
+  # Provides the DatabaseChanges protobuf type
+  database: https://github.com/streamingfast/substreams-sink-database-changes/releases/download/v4.0.0/substreams-sink-database-changes-v4.0.0.spkg
   sql: https://github.com/streamingfast/substreams-sink-sql/releases/download/protodefs-v1.0.7/substreams-sink-sql-protodefs-v1.0.7.spkg
 ```
 
@@ -169,19 +171,11 @@ binaries:
 
 ## Network Configuration
 
-Supported networks (see [references/networks.md](./networks.md) for complete list):
+The `network:` field takes a network ID, e.g. `mainnet` (Ethereum Mainnet) or
+`solana` (Solana Mainnet).
 
-- `mainnet` - Ethereum Mainnet
-- `optimism` - OP Mainnet
-- `arbitrum-one` - Arbitrum One Mainnet
-- `base` - Base Chain
-- `matic` - Polygon Mainnet
-- `bsc` - BNB Smart Chain Mainnet
-- `avalanche` - Avalanche C-Chain
-- `fantom` - Fantom Opera Mainnet
-- `solana-mainnet-beta` - Solana Mainnet
-- `near-mainnet` - Near Mainnet
-- And 70+ additional networks...
+**[networks.md](./networks.md) is the single source of truth** for the full list
+of supported network IDs — look them up there rather than guessing.
 
 ## Module Types
 
@@ -281,8 +275,10 @@ Output from other modules:
 inputs:
   - map: map_events
   - store: store_totals
-  - store: store_totals, mode: get    # Read-only access
-  - store: store_totals, mode: deltas # Get deltas only
+  - store: store_totals    # Read-only access
+    mode: get
+  - store: store_totals    # Get deltas only
+    mode: deltas
 ```
 
 ### Parameter Inputs
@@ -344,7 +340,8 @@ substreams run map_token_transfers -p map_token_transfers=0xa0b86a33e6...
   kind: map
   inputs:
     - map: map_events
-    - store: store_metadata, mode: get
+    - store: store_metadata
+      mode: get
 
 - name: store_metadata
   kind: store

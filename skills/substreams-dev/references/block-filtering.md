@@ -361,7 +361,7 @@ params:
 **Instruction-level filtering within those transactions is still manual.** The
 foundational module narrows you to the right transactions; you then iterate the
 instructions yourself and keep the ones whose program id / discriminator you want
-(see [solana.md](./solana.md) for `walk_instructions()`).
+(see the **`substreams-solana`** skill for `walk_instructions()`).
 
 ---
 

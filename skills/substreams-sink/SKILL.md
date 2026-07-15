@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.3.0
+  version: 1.3.1
   author: StreamingFast
   documentation: https://substreams.streamingfast.io
 ---
@@ -13,6 +13,18 @@ metadata:
 # Substreams Sink Development Expert
 
 Expert assistant for consuming Substreams data - building production-grade sinks and data pipelines.
+
+## Skill routing
+
+| User goal | Skill |
+|---|---|
+| **Custom app sink** (Go / JS / Python / Rust SDK consumer) | **this skill** (`substreams-sink`) |
+| **SQL module** (`db_out` / DatabaseChanges / From-proto) | `substreams-sql` |
+| **Run the sink yourself** (CLI, schema, ops on your infra) | `substreams-sink-deploy-local` |
+| **StreamingFast hosts the sink** (Portal HostedService) | `substreams-hosted-sink` (+ `portal-api`) |
+| **graph_out / EntityChanges module** (produce entities) | this skill (inline proto) + `substreams-dev` |
+
+Prefer existing sink CLIs (`substreams-sink-sql`, files, kv) over a hand-rolled consumer when they already cover the destination.
 
 ## Core Concepts
 
@@ -26,7 +38,7 @@ A Substreams sink is an application that:
 - **Processes** the data into your destination (database, queue, etc.)
 
 > **Note:** Before building a custom sink, consider using existing solutions:
-> - **[substreams-sink-sql](https://github.com/streamingfast/substreams-sink-sql)** - For PostgreSQL and ClickHouse. Handles cursor management, reorgs, batching, and schema management out of the box. Install via `brew install streamingfast/tap/substreams-sink-sql` or [download binaries](https://github.com/streamingfast/substreams-sink-sql/releases).
+> - **[substreams-sink-sql](https://github.com/streamingfast/substreams-sink-sql)** - For PostgreSQL and ClickHouse. Handles cursor management, reorgs, batching, and schema management out of the box. Install via `brew install streamingfast/tap/substreams-sink-sql` or [download binaries](https://github.com/streamingfast/substreams-sink-sql/releases). For full CLI ops, load `substreams-sink-deploy-local`.
 > - **[substreams-sink-kv](https://github.com/streamingfast/substreams-sink-kv)** - For key-value stores.
 > - **[substreams-sink-files](https://github.com/streamingfast/substreams-sink-files)** - For file-based outputs (JSON, CSV, Parquet).
 >
@@ -83,11 +95,17 @@ Before writing a `graph_out` or `db_out` module, choose the correct output proto
 
 > **Blocker — read before adding `substreams-entity-change`.**
 
-The published crate `substreams-entity-change = "1"` pins `prost = "0.11"` and `substreams = "0.5"`. It **cannot** resolve alongside the current toolchain (`substreams = "0.7"`, `prost = "0.13"`). Cargo errors at dep resolution with conflicting `prost` trait impls — no version constraint fixes it on v1.
+Do **not** rely on the `substreams-entity-change` crate for modern `substreams = "0.7"` pipelines:
+- **v1** pins `prost = "0.11"` / `substreams = "0.5"` → prost trait conflicts with the current toolchain.
+- **v2.0.0** has `prost ^0.13` but still depends on **`substreams ^0.6`**, so it does not drop cleanly into a 0.7 tree.
+
+No version constraint fully fixes this for 0.7 today. Prefer inlining the proto (below). Re-check [crates.io](https://crates.io/crates/substreams-entity-change) before changing this advice.
+
+> **New projects:** prefer SQL (`db_out` + `substreams-sql` / `substreams-sink-sql`) over `graph_out` unless you specifically need Graph Node / EntityChanges.
 
 ### Workaround: inline the entity-change proto
 
-Until v2 ships, define `sf.substreams.sink.entity.v1` types inline. **This proto is for graph-out (The Graph) only**. Do NOT use it for SQL sinks — that's a different proto package (`sf.substreams.sink.database.v1`).
+Define `sf.substreams.sink.entity.v1` types inline. **This proto is for graph-out (The Graph) only**. Do NOT use it for SQL sinks — that's a different proto package (`sf.substreams.sink.database.v1`).
 
 **1. Add the proto definition** (`proto/entity.proto`):
 
@@ -218,76 +236,138 @@ pub fn graph_out(events: Events) -> Result<EntityChanges, substreams::errors::Er
 
 ### Go (Recommended)
 
+Import path is **`github.com/streamingfast/substreams/sink`** (package lives in the main Substreams module; the old standalone `github.com/streamingfast/substreams-sink` module is deprecated).
+
 ```go
 package main
 
 import (
     "context"
-    "log"
+    "fmt"
 
+    "github.com/spf13/cobra"
+    "github.com/spf13/pflag"
+    "github.com/streamingfast/cli"
+    . "github.com/streamingfast/cli"
+    "github.com/streamingfast/logging"
+    pbsubstreamsrpc "github.com/streamingfast/substreams/pb/sf/substreams/rpc/v2"
     "github.com/streamingfast/substreams/sink"
 )
 
+var expectedOutputModuleType = "sf.substreams.sink.database.v1.DatabaseChanges" // adjust to your module
+var zlog, tracer = logging.RootLogger("my-sink", "github.com/you/my-sink")
+
 func main() {
-    sinker, err := sink.New(
-        sink.NewFromManifest("substreams.spkg", "map_events"),
-        sink.WithBlockRange(":+1000"),
+    logging.InstantiateLoggers()
+    Run("my-sink", "Custom Substreams sink",
+        Command(sinkRunE,
+            "sink [<manifest> [<output_module>]]",
+            "Run the sink",
+            RangeArgs(0, 2),
+            Flags(func(flags *pflag.FlagSet) { sink.AddFlagsToSet(flags) }),
+        ),
+        OnCommandErrorLogAndExit(zlog),
     )
-    if err != nil {
-        log.Fatalf("create sinker: %v", err)
+}
+
+func sinkRunE(cmd *cobra.Command, args []string) error {
+    manifestPath := "substreams.yaml"
+    outputModule := sink.InferOutputModuleFromPackage
+    if len(args) > 0 {
+        manifestPath = args[0]
+    }
+    if len(args) > 1 {
+        outputModule = args[1]
     }
 
-    sinker.Run(ctx, sink.NewSinker(
+    sinker, err := sink.NewFromViper(
+        cmd,
+        expectedOutputModuleType,
+        manifestPath,
+        outputModule,
+        "my-sink/1.0.0", // userAgent
+        zlog,
+        tracer,
+    )
+    if err != nil {
+        return fmt.Errorf("create sinker: %w", err)
+    }
+
+    // Load persisted cursor on restart; blank = start from module initialBlock / flags
+    cursor := sink.NewBlankCursor()
+    sinker.Run(context.Background(), cursor, sink.NewSinkerHandlers(
         handleBlockScopedData,
         handleBlockUndoSignal,
     ))
+    return nil
 }
 
 func handleBlockScopedData(ctx context.Context, data *pbsubstreamsrpc.BlockScopedData, isLive *bool, cursor *sink.Cursor) error {
-    // Process block data
-    // Persist cursor after successful processing
+    // Process data.Output.MapOutput, then persist cursor AFTER success
+    _ = cursor
     return nil
 }
 
 func handleBlockUndoSignal(ctx context.Context, undoSignal *pbsubstreamsrpc.BlockUndoSignal, cursor *sink.Cursor) error {
-    // Handle reorg: rewind data to undoSignal.LastValidBlock
-    // Persist undoSignal.LastValidCursor
+    // Rewind data to undoSignal.LastValidBlock, persist cursor
+    _ = cursor
     return nil
 }
 ```
+
+CLI flags (via `AddFlagsToSet`): `-e/--endpoint`, `-s/--start-block`, `-t/--stop-block`, `--final-blocks-only`, `-p/--params`, auth env vars, etc.
 
 See [references/go-sink.md](./references/go-sink.md) for complete guide.
 
 ### JavaScript (Node.js)
 
+Prefer **`createGrpcTransport`** (faster for large streams) over Connect HTTP. Official pattern:
+
 ```javascript
-import { createRegistry, createRequest } from "@substreams/core";
+import {
+    createRequest,
+    streamBlocks,
+    createAuthInterceptor,
+    createRegistry,
+    fetchSubstream,
+} from "@substreams/core";
 import { createGrpcTransport } from "@connectrpc/connect-node";
 
+const TOKEN = process.env.SUBSTREAMS_API_TOKEN;
+const ENDPOINT = "https://mainnet.eth.streamingfast.io:443";
+const SPKG = "https://spkg.io/streamingfast/substreams-eth-block-meta-v0.4.3.spkg";
+const MODULE = "db_out";
+
+const pkg = await fetchSubstream(SPKG);
+const registry = createRegistry(pkg);
 const transport = createGrpcTransport({
-    baseUrl: "https://mainnet.eth.streamingfast.io:443",
-    httpVersion: "2",
+    baseUrl: ENDPOINT,
+    interceptors: [createAuthInterceptor(TOKEN)],
+    jsonOptions: { typeRegistry: registry },
 });
 
 const request = createRequest({
     substreamPackage: pkg,
-    outputModule: "map_events",
-    startBlockNum: 17000000n,
+    outputModule: MODULE,
+    productionMode: true,
+    startBlockNum: "17000000",
     stopBlockNum: "+1000",
+    startCursor: (await getCursor()) ?? undefined,
 });
 
-for await (const response of stream(request, registry, transport)) {
-    if (response.message.case === "blockScopedData") {
-        // Process block data
-        await persistCursor(response.message.value.cursor);
-    } else if (response.message.case === "blockUndoSignal") {
-        // Handle reorg
-        await handleUndo(response.message.value);
+for await (const response of streamBlocks(transport, request)) {
+    const msg = response.message;
+    if (msg.case === "blockScopedData") {
+        // Process msg.value.output, then persist msg.value.cursor AFTER success
+        await writeCursor(msg.value.cursor);
+    } else if (msg.case === "blockUndoSignal") {
+        // Rewind to msg.value.lastValidBlock, persist msg.value.lastValidCursor
+        await writeCursor(msg.value.lastValidCursor);
     }
 }
 ```
 
-See [references/javascript-sink.md](./references/javascript-sink.md) for complete guide.
+Wrap the stream loop in retry/backoff for normal disconnects. See [references/javascript-sink.md](./references/javascript-sink.md) for complete guide.
 
 ### Python
 
@@ -321,29 +401,31 @@ See [references/python-sink.md](./references/python-sink.md) for complete guide.
 
 ### Rust
 
+Reference implementation (no official SDK). Stream wrapper shape from the examples:
+
 ```rust
 use substreams_stream::{BlockResponse, SubstreamsStream};
 
-let stream = SubstreamsStream::new(
-    endpoint,
-    cursor,
-    package,
-    modules.clone(),
-    "map_events".to_string(),
-    start_block,
-    stop_block,
+// SubstreamsStream::new(endpoint, cursor, package, output_module, start_block, stop_block)
+let mut stream = SubstreamsStream::new(
+    endpoint,                 // Arc<SubstreamsEndpoint>
+    cursor,                   // Option<String>
+    Some(package),            // Option<Package>
+    "map_events".to_string(), // output module name
+    start_block,              // i64
+    stop_block,               // u64 (0 = live)
 );
 
 while let Some(response) = stream.next().await {
     match response? {
         BlockResponse::New(data) => {
-            // Process block data
-            persist_cursor(&data.cursor);
+            // Process block data, then persist cursor AFTER success
+            persist_cursor(&data.cursor)?;
         }
         BlockResponse::Undo(signal) => {
-            // Handle reorg
-            rewind_to_block(signal.last_valid_block);
-            persist_cursor(&signal.last_valid_cursor);
+            // Handle reorg, then persist last_valid_cursor
+            rewind_to_block(signal.last_valid_block.as_ref())?;
+            persist_cursor(&signal.last_valid_cursor)?;
         }
     }
 }
@@ -384,13 +466,13 @@ When a chain reorganizes, you receive a `BlockUndoSignal`:
 
 ```
 BlockUndoSignal {
-    last_valid_block: BlockRef { num: 17000100, id: "0xabc..." }
+    last_valid_block: BlockRef { number: 17000100, id: "0xabc..." }
     last_valid_cursor: "opaque-cursor-string"
 }
 ```
 
 **Required actions:**
-1. Delete/revert all data for blocks > `last_valid_block.num`
+1. Delete/revert all data for blocks > `last_valid_block.number`
 2. Persist the `last_valid_cursor`
 3. Continue streaming (new blocks will follow automatically)
 

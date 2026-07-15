@@ -23,6 +23,8 @@ npm install @substreams/core @connectrpc/connect-web @connectrpc/connect
 
 ## Key Dependencies
 
+Pin versions that match [substreams-sink-examples](https://github.com/streamingfast/substreams-sink-examples) unless you have a reason to bump. `@substreams/core` latest may be newer (e.g. 0.17.x); verify before upgrading.
+
 **Node.js:**
 ```json
 {
@@ -51,6 +53,8 @@ npm install @substreams/core @connectrpc/connect-web @connectrpc/connect
 
 ### Main Entry Point
 
+Use **`createGrpcTransport`** on Node (official examples; typically 15–25% less overhead than Connect HTTP for large downloads). Browser uses `createConnectTransport` from `@connectrpc/connect-web`.
+
 ```javascript
 import {
     createRequest,
@@ -61,10 +65,11 @@ import {
     fetchSubstream,
     authIssue
 } from '@substreams/core';
-import { createConnectTransport } from "@connectrpc/connect-node";
+import { createGrpcTransport } from "@connectrpc/connect-node";
 
 // Configuration
 const API_KEY = process.env.SUBSTREAMS_API_KEY;
+const TOKEN = process.env.SUBSTREAMS_API_TOKEN; // prefer pre-issued JWT when available
 const ENDPOINT = "https://mainnet.eth.streamingfast.io:443";
 const SPKG = "https://spkg.io/streamingfast/substreams-eth-block-meta-v0.4.3.spkg";
 const MODULE = "db_out";
@@ -72,8 +77,8 @@ const START_BLOCK = '17000000';
 const STOP_BLOCK = '+1000';
 
 const main = async () => {
-    // Get authentication token
-    const { token } = await authIssue(API_KEY);
+    // Auth: use SUBSTREAMS_API_TOKEN, or exchange API key via authIssue
+    const token = TOKEN || (await authIssue(API_KEY)).token;
 
     // Fetch and parse the Substreams package
     const pkg = await fetchSubstream(SPKG);
@@ -81,11 +86,10 @@ const main = async () => {
     // Create type registry for protobuf decoding
     const registry = createRegistry(pkg);
 
-    // Create gRPC transport
-    const transport = createConnectTransport({
+    // gRPC transport (Node) — preferred over createConnectTransport for throughput
+    const transport = createGrpcTransport({
         baseUrl: ENDPOINT,
         interceptors: [createAuthInterceptor(token)],
-        useBinaryFormat: true,
         jsonOptions: {
             typeRegistry: registry,
         },
@@ -119,6 +123,7 @@ const stream = async (pkg, registry, transport) => {
         startCursor: cursor ?? undefined,
     });
 
+    // streamBlocks yields responses with a .message oneof (blockScopedData | blockUndoSignal | ...)
     for await (const response of streamBlocks(transport, request)) {
         await handleResponse(response.message, registry);
     }
@@ -174,10 +179,11 @@ const handleBlockUndoSignal = async (signal) => {
     const lastValidBlock = signal.lastValidBlock;
     const lastValidCursor = signal.lastValidCursor;
 
-    console.log(`Reorg: rewinding to block #${lastValidBlock.num}`);
+    const lastValidNum = lastValidBlock?.num ?? lastValidBlock?.number;
+    console.log(`Reorg: rewinding to block #${lastValidNum}`);
 
-    // 1. Revert data for blocks > lastValidBlock.num
-    await rewindData(lastValidBlock.num);
+    // 1. Revert data for blocks > lastValidNum
+    await rewindData(lastValidNum);
 
     // 2. Persist the valid cursor
     await writeCursor(lastValidCursor);
@@ -327,12 +333,13 @@ import { createConnectTransport } from "@connectrpc/connect-web";
 
 const ENDPOINT = "https://mainnet.eth.streamingfast.io:443";
 const TOKEN = "your-jwt-token"; // Get from authIssue or your backend
+const SPKG = "https://spkg.io/streamingfast/substreams-eth-block-meta-v0.4.3.spkg";
 
 const main = async () => {
     const pkg = await fetchSubstream(SPKG);
     const registry = createRegistry(pkg);
 
-    // Browser transport (different from Node.js)
+    // Browser: Connect web transport (gRPC transport is Node-only)
     const transport = createConnectTransport({
         baseUrl: ENDPOINT,
         interceptors: [createAuthInterceptor(TOKEN)],
@@ -406,12 +413,13 @@ import {
     fetchSubstream,
     authIssue,
 } from '@substreams/core';
-import { createConnectTransport } from "@connectrpc/connect-node";
+import { createGrpcTransport } from "@connectrpc/connect-node";
 import { Code } from '@connectrpc/connect';
 import fs from 'fs';
 
 // Configuration
 const API_KEY = process.env.SUBSTREAMS_API_KEY;
+const TOKEN = process.env.SUBSTREAMS_API_TOKEN;
 const ENDPOINT = process.env.SUBSTREAMS_ENDPOINT || "https://mainnet.eth.streamingfast.io:443";
 const SPKG = process.env.SUBSTREAMS_PACKAGE || "https://spkg.io/streamingfast/substreams-eth-block-meta-v0.4.3.spkg";
 const MODULE = process.env.SUBSTREAMS_MODULE || "db_out";
@@ -458,14 +466,13 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const main = async () => {
     console.log('Starting Substreams sink...');
 
-    const { token } = await authIssue(API_KEY);
+    const token = TOKEN || (await authIssue(API_KEY)).token;
     const pkg = await fetchSubstream(SPKG);
     const registry = createRegistry(pkg);
 
-    const transport = createConnectTransport({
+    const transport = createGrpcTransport({
         baseUrl: ENDPOINT,
         interceptors: [createAuthInterceptor(token)],
-        useBinaryFormat: true,
         jsonOptions: { typeRegistry: registry },
     });
 
@@ -503,7 +510,9 @@ const main = async () => {
                     }
                 } else if (msg.case === 'blockUndoSignal') {
                     const signal = msg.value;
-                    console.log(`Reorg: rewind to block #${signal.lastValidBlock.num}`);
+                    // Official examples use .num; proto field is "number" — check both if needed
+                    const lastValid = signal.lastValidBlock?.num ?? signal.lastValidBlock?.number;
+                    console.log(`Reorg: rewind to block #${lastValid}`);
 
                     // Implement your rewind logic here
                     // ...

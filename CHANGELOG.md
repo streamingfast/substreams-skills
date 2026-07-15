@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `substreams-sink` (v1.3.1): correct Go quickstart to monorepo API (`github.com/streamingfast/substreams/sink`, `NewFromViper` + `NewSinkerHandlers`); fix JS quickstart to official `streamBlocks` + `createGrpcTransport`; note entity-change v2 still pins `substreams ^0.6`; add skill routing vs sql/deploy-local/hosted-sink; align JS reference with gRPC transport.
 - `substreams-dev` (v1.3.1): short registry form `name@version` and `@latest` do not resolve via the CLI (rewrites to `substreams.dev/v1/packages/...` HTML 404) — prefer `https://spkg.io/v1/packages/<slug>/<version>` for `imports:`, `substreams run`/`info`, and head-block lookup; document relative `-t` + `-s -1` limitation.
 - `substreams-dev`: package metadata example used unprefixed `version: 1.3.0` (must be `v`-prefixed); update Solana crate guidance to `0.15`; clarify `substreams-entity-change` v2 still pins `substreams ^0.6` so graph_out should keep inlining EntityChanges.
 - `portal-api` (v1.16.1): upgrade/downgrade rubric compared `total_cents` to `base_price × 100` even though both fields are already integer cents — compare cents directly.

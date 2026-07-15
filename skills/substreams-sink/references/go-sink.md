@@ -14,9 +14,14 @@ Go is the **recommended language** for building Substreams sinks because:
 
 ## Installation
 
+The sink library lives in the main Substreams module (not the deprecated standalone `github.com/streamingfast/substreams-sink` repo):
+
 ```bash
-go get github.com/streamingfast/substreams/sink
+go get github.com/streamingfast/substreams@latest
+# import path: github.com/streamingfast/substreams/sink
 ```
+
+Match the version used by [substreams-sink-examples](https://github.com/streamingfast/substreams-sink-examples) when possible (e.g. `v1.18.x`).
 
 ## Key Dependencies
 
@@ -279,16 +284,14 @@ The SDK provides these flags automatically via `sink.AddFlagsToSet()`:
 # Basic usage with manifest
 go run . sink substreams.yaml map_events
 
-# From package registry
-go run . sink substreams_template@v0.1.0
-
-# From URL
+# From spkg URL (preferred over short name@version — short form often 404s in CLI/registry rewrite)
 go run . sink https://spkg.io/streamingfast/substreams-eth-block-meta-v0.4.3.spkg db_out
+# or: https://spkg.io/v1/packages/<slug>/<version>
 
-# With explicit endpoint
+# With explicit endpoint (otherwise inferred from manifest network)
 go run . sink manifest.spkg map_events --endpoint mainnet.eth.streamingfast.io:443
 
-# With block range
+# With block range (flags, not NewFromViper args)
 go run . sink manifest.spkg map_events -s 17000000 -t +1000
 
 # With module parameters
@@ -297,7 +300,7 @@ go run . sink manifest.spkg map_events -p "map_events=0xa0b86a33..."
 # Final blocks only (no reorgs)
 go run . sink manifest.spkg map_events --final-blocks-only
 
-# Development mode (debug output)
+# Development mode (debug output — not for production)
 go run . sink manifest.spkg map_events --development-mode
 ```
 

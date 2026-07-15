@@ -1,11 +1,11 @@
 ---
-name: portal-api-auth
+name: portal-api-jwt
 description: Obtain and refresh a short-lived StreamingFast Portal access token via the device-code login flow (OAuth 2.0 Device Authorization Grant), so the agent can then call the Portal API on the user's behalf. Use when the agent has no API key and needs the user to log in interactively — e.g. "connect to my portal account", "log me in", "I don't have an API key", or when a Portal API call returns 401/unauthenticated and a token must be acquired or renewed. Produces an access token (Bearer) scoped to one organization and the user's role, plus a refresh token to renew it without re-prompting.
 license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.5.0
+  version: 1.5.1
   author: StreamingFast
   documentation: https://docs.substreams.dev
 ---

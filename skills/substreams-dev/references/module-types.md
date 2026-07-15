@@ -102,14 +102,17 @@ pub fn store_volume(transfers: Transfers, store: StoreAddBigInt) {
 ```
 
 #### Append Policy
-Concatenates byte values:
+Builds a semicolon-delimited string: each `append` adds `"{item};"` to the value
+under the key, so the stored value is `item1;item2;item3;` — not concatenated raw
+bytes. `StoreAppend<T>` takes `T: Into<String>` and `append` consumes the item by
+value:
 
 ```rust
 #[substreams::handlers::store]
-pub fn store_history(events: Events, store: StoreAppendBytes) {
+pub fn store_history(events: Events, store: StoreAppend<String>) {
     for event in events.items {
         let key = format!("history:{}", event.contract);
-        store.append(0, &key, &event.data);
+        store.append(0, &key, event.id);
     }
 }
 ```
@@ -172,7 +175,8 @@ Only receive changes:
 
 ```yaml
 inputs:
-  - store: my_store, mode: deltas
+  - store: my_store
+    mode: deltas
 ```
 
 ### Best Practices
@@ -362,7 +366,8 @@ modules:
     kind: map
     inputs:
       - map: map_events
-      - store: store_metadata, mode: get
+      - store: store_metadata
+        mode: get
 ```
 
 ## Error Handling
@@ -397,7 +402,7 @@ pub fn store_data(events: Events, store: StoreSetString) {
         if let Ok(value) = serialize_event(&event) {
             store.set(0, &event.id, &value);
         } else {
-            substreams::log::warn!("Failed to serialize event: {}", event.id);
+            substreams::log::info!("Failed to serialize event: {}", event.id);
         }
     }
 }
@@ -434,9 +439,7 @@ substreams run map_transfers -s 17000000 -t 17000001
 ### Performance Testing
 
 ```bash
-# Measure processing time
+# Rough end-to-end timing — handlers execute server-side, so wall time is
+# dominated by network and backend load, not by your WASM
 time substreams run map_transfers -s 17000000 -t +1000
-
-# Check memory usage
-substreams run map_transfers -s 17000000 -t +1000 --debug
 ```

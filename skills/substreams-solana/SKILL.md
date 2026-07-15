@@ -11,7 +11,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.4.2
+  version: 1.4.3
   author: StreamingFast
   documentation: https://docs.substreams.dev/how-to-guides/develop-your-own-substreams/solana
 ---
@@ -227,7 +227,11 @@ opt-level = "s"
 strip = "debuginfo"
 ```
 
-**Do not** combine `substreams = "0.6"` with `substreams-solana = "0.15"` (or `0.7` with `0.14`) — dual trees / link errors. Re-check [crates.io/crates/substreams-solana](https://crates.io/crates/substreams-solana) before assuming these pins forever.
+**Keep the pair matched.** `substreams-solana` declares the `substreams` version it was built against (`0.15` → `substreams ^0.7`; `0.14.3` → `^0.6`). Pin the row above rather than mixing majors.
+
+Mixing (`0.6` + `0.15`, or `0.7` + `0.14`) does **not** fail the build — cargo silently resolves **two** copies of `substreams` into the tree and compiles anyway. A green build is therefore *not* evidence your versions are right; check `cargo tree | grep substreams` and expect exactly one version.
+
+Re-check [crates.io/crates/substreams-solana](https://crates.io/crates/substreams-solana) before assuming these pins forever.
 
 No `abi/` or `substreams-ethereum-abigen` for Solana projects.
 
@@ -409,7 +413,8 @@ After generators, still enforce pre-flight instruction list and account filters 
 | Far fewer events than expected | You used top-level `message.instructions` — switch to `walk_instructions()` |
 | Empty output | Wrong program ID, wrong disc, `initialBlock` past data, or filtering failed txs incorrectly |
 | Mint filter never matches | Using SPL `Transfer` (3) instead of `TransferChecked` (12) |
-| WASM / prost / link errors | Use a matched pair: `0.7`+`0.15` or `0.6`+`0.14.x` — never mix; `rm -rf target` and rebuild |
+| Two `substreams` versions in `cargo tree` | Mixed majors (`0.6`+`0.15` / `0.7`+`0.14`). It still builds — realign to a matched pair anyway |
+| `type Address<'_> cannot be dereferenced` | `ix.accounts()` yields **owned** `Address`; drop the `*` (`if a == MINT`). Only `.iter()` gives you `&Address` |
 | Wrong account field | Re-check IDL account order or `Accounts` struct — do not guess indexes |
 | Output is hex/base64/JSON of ix data | **Decode** into typed proto fields — see [Hard rule](#hard-rule-decode-instruction-data-into-structured-objects) |
 | Only discriminator / program filter, no args | Incomplete — parse payload + named accounts for every emitted instruction |

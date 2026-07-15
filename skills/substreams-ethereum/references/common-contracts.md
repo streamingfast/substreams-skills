@@ -80,7 +80,7 @@ if log.address == USDC { /* … */ }
 if hex::encode(&log.address) == "a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" { /* … */ }
 ```
 
-`hex::encode` emits **lowercase, no `0x`**. Comparing it against a checksummed or `0x`-prefixed literal silently never matches — a top cause of "empty output". `hex_literal::hex!` accepts either case.
+`hex::encode` / `Hex::encode` emit **lowercase, no `0x`**. Comparing either against a checksummed or `0x`-prefixed literal silently never matches — a top cause of "empty output". Prefer **byte** compares for filters (`log.address == USDC`). For **emitted** address/tx fields, re-prefix: `format!("0x{}", Hex::encode(…))`. `hex_literal::hex!` accepts either case.
 
 ## EVM networks
 

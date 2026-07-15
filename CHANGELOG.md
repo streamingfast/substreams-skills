@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `substreams-ethereum` (v1.0.1): clarify that `Hex::encode` is unprefixed — emit addresses/tx as `0x` + lowercase hex; keep store keys consistent with lookups.
+- `substreams-ethereum`: document `getrandom` + `substreams_ethereum::init!()` for wasm builds; point T3.1 as the canonical `RpcBatch` + cache-store pattern.
+- `examples/T2.2-univ2-swaps`: batch token0/token1 and ERC-20 metadata via `RpcBatch` instead of one `.call()` per field.
 - `portal-api` (v1.16.1): upgrade/downgrade rubric compared `total_cents` to `base_price × 100` even though both fields are already integer cents — compare cents directly.
 - `portal-api`: clarify `DeployDatabase` attaches an existing Postgres connection only (does not provision a DB; no `clickhouse_spec` — use Deploy `outputConfig.clickhouse`); note serverless DB cold-start retries on Deploy.
 - `portal-api`: document production JSON quirks verified live — proto3 omits zeros (e.g. missing `plan_tier` ≈ Community), `int64`/`uint64` may be strings, empty billing/state objects are valid; deployment IDs are server UUIDs (not only a `dep` prefix).

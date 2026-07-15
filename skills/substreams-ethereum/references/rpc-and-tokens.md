@@ -86,7 +86,11 @@ pub fn map_pool_tokens(block: eth::Block) -> Result<PoolTokenPairs, Error> {
                 Err(_) => continue,
             };
 
-            result.entries.push(PoolTokenEntry { pool: Hex::encode(&pool), /* … */ });
+            // Emit 0x-prefixed addresses; use the same format as store keys and get_last lookups.
+            result.entries.push(PoolTokenEntry {
+                pool: format!("0x{}", Hex::encode(&pool)),
+                /* token0/token1 similarly with 0x prefix */
+            });
         }
     }
     Ok(result)
@@ -131,8 +135,9 @@ pub fn store_pool_tokens(pairs: PoolTokenPairs, store: StoreSetIfNotExistsProto<
 ```rust
 #[substreams::handlers::map]
 pub fn map_swaps(block: eth::Block, store: StoreGetProto<TokenPair>) -> Result<SwapEvents, Error> {
-    // …
-    let tokens = match store.get_last(&Hex::encode(&log.address)) {
+    // Key must match what map_pool_tokens / store_pool_tokens wrote (same 0x policy).
+    let key = format!("0x{}", Hex::encode(&log.address));
+    let tokens = match store.get_last(&key) {
         Some(t) => t,
         None => continue,
     };

@@ -95,10 +95,11 @@ When a handler processes exactly **one** event type, `block.events::<E>(&address
 const USDC: [u8; 20] = hex_literal::hex!("a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48");
 
 // addresses is &[&[u8]]
+// Hex::encode has no 0x — re-prefix for emitted address strings.
 for (transfer, log) in block.events::<abi::erc20::events::Transfer>(&[&USDC]) {
     out.push(Transfer {
-        from: Hex::encode(&transfer.from),
-        to: Hex::encode(&transfer.to),
+        from: format!("0x{}", Hex::encode(&transfer.from)),
+        to: format!("0x{}", Hex::encode(&transfer.to)),
         amount: transfer.value.to_string(),
         log_index: log.index(),          // LogView accessor, not a field
     });

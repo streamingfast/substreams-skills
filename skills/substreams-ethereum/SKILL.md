@@ -12,7 +12,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.0.0
+  version: 1.0.1
   author: StreamingFast
   documentation: https://docs.substreams.dev/how-to-guides/develop-your-own-substreams/ethereum
 ---
@@ -165,6 +165,10 @@ ethabi = "18"                # raw decoding without generated bindings
 substreams-ethereum = "0.11" # REQUIRED for Abigen in build.rs
 prost-build = "0.13"
 
+# ethabi pulls getrandom; register a no-op RNG for wasm (crate docs)
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.2", features = ["custom"] }
+
 [lib]
 crate-type = ["cdylib"]
 
@@ -174,7 +178,7 @@ opt-level = "s"
 strip = "debuginfo"
 ```
 
-`substreams-ethereum` must be in **both** `[dependencies]` and `[build-dependencies]` when using `Abigen`.
+`substreams-ethereum` must be in **both** `[dependencies]` and `[build-dependencies]` when using `Abigen`. Call `substreams_ethereum::init!();` once at the top of `lib.rs` so getrandom is registered under `wasm32-unknown-unknown`.
 
 ## build.rs (ABI codegen)
 
@@ -217,10 +221,12 @@ modules:
 
 ```rust
 use substreams::errors::Error;
-use substreams::scalar::BigInt;
 use substreams::Hex;
 use substreams_ethereum::pb::eth::v2 as eth;
 use substreams_ethereum::Event;   // REQUIRED for .match_and_decode()
+
+// Hex::encode is lowercase and has NO 0x — always re-prefix for emitted addresses/tx hashes.
+fn hex0x(b: &[u8]) -> String { format!("0x{}", Hex::encode(b)) }
 
 const POOL: [u8; 20] = hex_literal::hex!("b4e16d0168e52d35cacd2c6185b44281ec28c9dc");
 
@@ -229,19 +235,20 @@ fn map_events(block: eth::Block) -> Result<MyEvents, Error> {
     let mut out = Vec::new();
 
     for trx in block.transactions() {              // successful txs only
-        let tx_hash = Hex::encode(&trx.hash);
+        let tx_hash = hex0x(&trx.hash);
 
         for (log, _call) in trx.logs_with_calls() {
             if log.address != POOL {               // 1) cheapest reject: address
                 continue;
             }
             // 2) MUST decode into typed fields (not JSON, not raw bytes)
-            if let Some(swap) = abi::pool::events::Swap::match_and_decode(log) {
+            // Module path = write_to_file stem (e.g. uniswap_v2_pair), not Abigen::new name.
+            if let Some(swap) = abi::uniswap_v2_pair::events::Swap::match_and_decode(log) {
                 out.push(Swap {
                     block_number: block.number,
                     tx_hash: tx_hash.clone(),
                     log_index: log.index,
-                    sender: Hex::encode(&swap.sender),
+                    sender: hex0x(&swap.sender),
                     amount0_in: swap.amount0_in.to_string(),  // BigInt → decimal string
                 });
             }
@@ -265,6 +272,7 @@ For a handler processing **one** event type, `block.events::<E>(&[&ADDR])` colla
 | **Need failed txs / full counts?** | Iterate `&block.transaction_traces` (all traces) and check `status` yourself. |
 | **Filter `log.address` then `topics[0]` first** | Cheapest reject before decoding. |
 | **`uint256` → `BigInt` → decimal string** | `u64`/`u128` silently truncate real token amounts. |
+| **Emitted addresses/tx = `0x` + lowercase hex** | `Hex::encode` has **no** `0x`. Use `format!("0x{}", Hex::encode(…))` (or `hex0x` above). Keep **store keys** the same format you use when looking them up. |
 | **Do not invent topic0 or param order** | Derive from ABI or `keccak256` of the canonical signature. |
 | **One proto message per event** | `Swap`, `Mint`, … — never a single generic event for all types. |
 
@@ -275,7 +283,7 @@ Matching topic0 is only step 1. **You must continue and decode the payload** int
 ### With an ABI (preferred)
 
 ```rust
-if let Some(swap) = abi::pool::events::Swap::match_and_decode(log) {
+if let Some(swap) = abi::uniswap_v2_pair::events::Swap::match_and_decode(log) {
     // swap.amount0_in is a substreams::scalar::BigInt — already typed
 }
 ```
@@ -307,19 +315,17 @@ Contract state that is not in the log (a pool's `token0`, a token's `symbol`/`de
 ```rust
 use substreams_ethereum::rpc::RpcBatch;
 
-// execute() returns Result<RpcResponses, String>. `String` is not a std Error,
-// so `?` will NOT convert into substreams::errors::Error (an anyhow::Error alias).
-// Match it, or map_err(|e| anyhow::anyhow!("rpc: {e}"))?.
+// execute() → Result<_, String> (not a std Error — do not `?` into substreams::Error).
+// Per-call failure is more common: decode → Option (None on revert / bad return).
 let batch = match RpcBatch::new()
     .add(abi::erc20::functions::Symbol {}, addr.to_vec())
     .add(abi::erc20::functions::Decimals {}, addr.to_vec())
     .execute()
 {
     Ok(b) => b,
-    Err(_) => return Ok(Default::default()),   // or skip this contract
+    Err(_) => return Ok(Default::default()),
 };
 
-// decode returns Option — None on revert / non-compliant return. Never unwrap().
 let symbol = RpcBatch::decode::<_, abi::erc20::functions::Symbol>(&batch.responses[0])
     .unwrap_or_else(|| "UNKNOWN".to_string());
 let decimals = RpcBatch::decode::<_, abi::erc20::functions::Decimals>(&batch.responses[1])
@@ -329,10 +335,11 @@ let decimals = RpcBatch::decode::<_, abi::erc20::functions::Decimals>(&batch.res
 
 **RPC is the top performance and correctness trap on EVM.** Rules:
 
-1. **Batch** related calls into one `RpcBatch` — never one `execute()` per field.
+1. **Batch** related calls into one `RpcBatch` — never one `execute()` / `.call()` per field.
 2. **Cache in a `set_if_not_exists` store**, keyed by address — pay the RPC once per contract, not once per block. **Never a `HashMap` inside a map handler**: it is rebuilt every block and re-issues every call.
 3. **Always handle failure.** Non-compliant tokens exist (`symbol()` returning `bytes32`, or missing entirely). Decode returns `None` — fall back to a default, do not `unwrap()`.
 4. Prefer log-derived data when the event already carries the field.
+5. Prefer **map (fetch) → store (cache) → map (consume)** so RPC stays out of the store handler (T3.1).
 
 Eval note: T3.1 agents that skipped `pool.token0()`/`token1()` resolution averaged **41%** correctness; with the `RpcBatch` + cache-store pattern, **100%**. This is the highest-value pattern in this skill.
 
@@ -354,9 +361,9 @@ After generators, still enforce the pre-flight event list and address filters.
 1. Pre-flight complete (network, contract, events, fields, enrichment, sink, blocks).
 2. Decoding path chosen (ABI / Solidity source / known signature).
 3. `network:` set for the target chain, input `sf.ethereum.type.v2.Block`, crate versions as above.
-4. `substreams-ethereum` in **both** `[dependencies]` and `[build-dependencies]` if using `Abigen`; `use substreams_ethereum::Event;` in every file calling `match_and_decode`.
+4. `substreams-ethereum` in **both** `[dependencies]` and `[build-dependencies]` if using `Abigen`; `use substreams_ethereum::Event;`; `substreams_ethereum::init!();` in `lib.rs`.
 5. Loop: `block.transactions()` + `logs_with_calls()` + address filter + topic0 filter; only requested events matched.
-6. **Decode** log data into **typed structured fields**, **one protobuf message type per event**; `uint256` → `BigInt` → decimal `string`, addresses → `0x` hex.
+6. **Decode** into **typed fields**, **one protobuf message type per event**; `uint256` → `BigInt` → decimal `string`; addresses/tx → **`0x` + lowercase hex** (not bare `Hex::encode`).
 7. Any RPC batched **and** cached in a `set_if_not_exists` store.
 8. `initialBlock` = start of needed range; test with `substreams run -s <block> -t +100 -o jsonl`.
 9. Self-check: no generic mega-message; no `*_json` / `raw_data` blobs; no `u64` token amounts.
@@ -369,9 +376,9 @@ After generators, still enforce the pre-flight event list and address filters.
 | T1.1 block-stats | Block-level stats over `block.transaction_traces` (no decoding) |
 | T1.2 usdc-transfers | ERC-20 `Transfer` topic0 filter + `uint256` decode |
 | T2.1 nft-mints | ERC-721 `Transfer` with zero-address `from` (mint detection) |
-| T2.2 univ2-swaps | `Abigen` + `match_and_decode` + token metadata store |
+| T2.2 univ2-swaps | `Abigen` + `match_and_decode` + store-backed token metadata |
 | T2.3 sql-sink | EVM events → Postgres `db_out` |
-| T3.1 univ3-usd-price | `RpcBatch` `token0`/`token1` + `set_if_not_exists` cache + sqrtPriceX96 pricing |
+| T3.1 univ3-usd-price | **Canonical RPC pattern:** `RpcBatch` + `set_if_not_exists` + sqrtPriceX96 pricing |
 | T3.2 cross-dex-volume | Multi-contract aggregation → `graph_out` |
 | T6.1 eth-univ2-no-abi | topic0 derived from Solidity source, no ABI JSON |
 | T4.1 / T4.2 | **Cautionary** — silent ship, no clarifying questions asked |
@@ -382,7 +389,7 @@ After generators, still enforce the pre-flight event list and address filters.
 |---|---|
 | `no method named 'decode' found` / `match_and_decode` unresolved | Add `use substreams_ethereum::Event;` |
 | `Abigen` not found in `build.rs` | Add `substreams-ethereum` to `[build-dependencies]` |
-| Empty output | Wrong address (check lowercase/no `0x` when comparing hex strings), wrong topic0, or `initialBlock` past the data |
+| Empty output | Wrong address (when comparing **as strings**, both sides lowercase and same `0x` policy), wrong topic0, or `initialBlock` past the data |
 | Fewer events than expected | Iterating only top-level `receipt.logs` of a subset, or filtering failed txs incorrectly |
 | Extra events vs Etherscan | Iterating `call.logs` directly and including `state_reverted` calls — use `logs_with_calls()` |
 | Token amounts wrong / negative / truncated | `uint256` parsed into `u64`/`i64` — use `BigInt`, emit decimal `string` |
@@ -390,6 +397,7 @@ After generators, still enforce the pre-flight event list and address filters.
 | Very slow / RPC timeouts | Unbatched or uncached `eth_call` — batch + `set_if_not_exists` store |
 | spkg import 404 | Use `substreams-ethereum`, NOT `sf-ethereum` (doesn't exist); verify the release exists |
 | `hex_literal` unresolved | Cargo key is `hex-literal` (hyphen); `use hex_literal::hex` (underscore) |
+| `getrandom` / RNG panic in wasm | Add `getrandom` with `features = ["custom"]` and `substreams_ethereum::init!();` in `lib.rs` |
 | ClickHouse `SYNTAX_ERROR` on `index` / `keys` | Rename columns in proto (`log_index`, `topic_keys`) — `substreams-sql` |
 
 ## Resources

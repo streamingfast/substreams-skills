@@ -13,7 +13,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.12.1
+  version: 1.12.2
   author: StreamingFast
   documentation: https://docs.substreams.dev/how-to-guides/sinks
 ---
@@ -85,6 +85,8 @@ If reconfigure / redeploy changes **spkg URL, version, or `output_module`**, tre
 
 **One question, own turn, selectable choices, always include custom.** Do not batch with engine, DB host, or Portal login.
 
+You **may** correct a false premise or restate known context in this same turn (e.g. "MySQL isn't supported — Postgres/ClickHouse only", "StreamingFast won't provision the DB", "noted: ClickHouse Cloud"). What you must not add is a **second question** or a deploy CTA.
+
 > Before any hosted deploy, check Substreams **data quality** with **`substreams run` only** (prints module output; does **not** write to a database). Hosted backfill will later write whatever this module emits into your DB.
 >
 > 1. **Give me the `substreams run` command** (recommended)  
@@ -97,9 +99,9 @@ Then **stop the turn** and wait. Do not add “and then we’ll deploy” as the
 | User picks | Set flag | Next action |
 |---|---|---|
 | **1 — Command** | leave **unset** until done | Fill in a concrete `substreams run` command (below), show it to the user, ask them to run it and confirm the printed data looks right. **Do not** start a sink. After they confirm OK → `OUTPUT_TEST_STATUS=tested_ok`. |
-| **2 — Already verified** | `user_verified` | Proceed to engine/DB/Portal workflow. |
+| **2 — Already verified** | `user_verified` **only if** what they describe is `substreams run` | Read their answer. If they describe anything else (local sink, DB sync, "the build passed"), the flag stays **unset** — say why it doesn't count and re-offer 1–3. |
 | **3 — Skip** | `skipped` | Warn once (bad data → wasted backfill / dirty DB), then proceed. |
-| **4 — Other** | — | Clarify; re-offer 1–3 if still deploying. If they ask to “test with a local sink,” refuse for this gate and restate: quality check = `substreams run` only. |
+| **4 — Other** | — | Clarify; re-offer 1–3 if still deploying. If they ask to “test with a local sink,” refuse **for this gate** and restate: quality check = `substreams run` only. Running a local sink is legitimate work (`substreams-sink-deploy-local`) — it just cannot substitute for this gate, so say "not as the quality check", not "never". |
 
 ### How to provide the test (when they pick 1)
 
@@ -122,7 +124,7 @@ substreams run ./substreams.yaml <output_module> \
 | `./substreams.yaml` | Their manifest or a local `.spkg` path |
 | `<output_module>` | Exact module that will be `execution_config.output_module` on Deploy |
 | `<network>` | Same network id as Deploy (e.g. `solana`, `mainnet`) |
-| `<start_block>` | A recent or known-good start for a short window |
+| `<start_block>` | A recent or known-good start for a short window — the manifest's `initialBlock`, or a block you know has activity. Asking for it is fine: it's part of filling in this command, not a new question. Do **not** pair `-s -1` with a relative `-t +N` (CLI needs an absolute start). |
 
 **After they run it**, ask only: “Does the printed output look correct?” → yes sets `tested_ok`. If wrong, fix the package (`substreams-dev` / chain / `substreams-sql`) **before** hosted Deploy. Publish to a public URL remains a **later** step for Deploy — not part of this quality gate.
 
@@ -433,6 +435,16 @@ If it goes to `ERROR` or crashloops, pull `GetDeploymentEvents` (recent lifecycl
 
 ### 7. Operate
 
+**Start here: resolve the name → `deployment_id`.** Users refer to sinks by name ("scale `raydium-swaps`"); every route needs the server id. Call `ListDeployments` (`{"organization_id": "..."}`) and match on `deployment_name` — **never** guess a slug. Then:
+
+```bash
+# Scale to 3 replicas (confirm first — this is a mutation)
+curl -sS -X POST "$BASE_URL/sf.portalapi.v1.HostedService/SetReplica" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"deployment_id":"'"$DEPLOYMENT_ID"'","organization_id":"'"$ORG_ID"'","count":3}'
+```
+
+- **Status / lag (read — no confirmation)** — `GetDeploymentState` (same call as step 6): headline status first, then `current_block` vs `head_block` and `head_block_time_drift`.
 - **Scale / pause** — `SetReplica` with `count` (0 pauses processing).
 - **Reconfigure** — `UpdateDeploymentConfig` (new spkg, execution config, output, or `api_key_id`; leave a field empty to keep it). `restart_from_scratch:true` resets the cursor (foundational-store only).
 - **Reset (destructive)** — `ResetDeployment`; `drop_schema:true` drops the schema, `false` truncates. Both wipe sink data and restart from the configured start block.
@@ -466,25 +478,26 @@ From-proto uses **`CREATE TABLE IF NOT EXISTS`** — it does **not** migrate col
 ## Common Pitfalls
 
 1. **Skipping the output-quality offer** — saying “Ready to proceed to the hosted ClickHouse deployment?” while `OUTPUT_TEST_STATUS` is unset is a **hard failure**. Offer / give a **`substreams run` command** first. Building/publishing is not verification.
-1b. **Quality check via local sink** — using `substreams-sink-sql` or writing to local ClickHouse/Postgres “to test” is **wrong** for this gate. Quality check = **`substreams run` only** (command for the user; stdout/jsonl).
-2. **Unsupported engine** — hosted SQL is **PostgreSQL or ClickHouse only**. Never accept MySQL, SQLite, BigQuery, etc., or KV/files as the hosted destination; redirect to self-managed skills if needed.
-3. **Assuming StreamingFast provides the database** — it does **not**. StreamingFast hosts only the sink runner; the output DB is **always the user's own**, connected to remotely. `DeployDatabase` attaches/validates that existing connection — it never provisions a database (and its request has no `clickhouse_spec`, so ClickHouse connections are supplied inline in `Deploy`). If the user has no DB, they must stand one up (ClickHouse Cloud, managed Postgres, self-hosted with public DNS) first. Never promise to "provision/host/spin up/create" a database.
-4. **ClickHouse + Database Changes** — not supported. Use From proto definition (custom proto + annotations). Do not set `module_output_type` to `DatabaseChanges` when `outputConfig` is ClickHouse.
-5. **ClickHouse PK vs ORDER BY** — create-table fails with `Primary key must be a prefix of the sorting key` when proto has e.g. `primary_key` on `id` but `order_by_fields: [slot, id]`. **Fix the spkg proto** (PK fields must be the leading `order_by_fields`), rebuild, redeploy — not the ClickHouse connection. Full rule and examples: `substreams-sql` → “ClickHouse hard rule: primary key must prefix ORDER BY”.
-6. **ClickHouse reserved column names** — e.g. `index`, `keys` → `SYNTAX_ERROR` on CREATE. Rename in proto before first deploy (`substreams-sql`).
-7. **`substreams_dev_id` parse failure** — logs show `invalid Substreams Registry short package identifier "substreams-dev://..."`: switch Deploy/Update to `spkg.url` = `https://api.substreams.dev/v1/packages/<name>/<version>`.
-8. **Secret page 404 on admin.streamingfast.io** — use `https://thegraph.market/sinks/<id>/secret?output=clickhouse` (or `app.streamingfast.io`).
-9. **Unreachable host** — `localhost` / Docker service names fail from hosted runners.
-10. **Schema drift after proto rename** — `NO_SUCH_COLUMN_IN_TABLE` → Reset with `drop_schema: true` (confirm first).
-11. **Wrong output proto** — a SQL sink whose module doesn't emit `DatabaseChanges` runs in From proto definition mode (tables derived from your proto). If the user expected `db_out`/`DatabaseChanges` on **Postgres**, send them to `substreams-sql` first.
-12. **`organization_id` mismatch** — the Bearer token is pinned to one org; every call's `organization_id` must equal it, or it's rejected. Re-login to target a different org.
-13. **`permission_denied` on a mutation** — the logged-in user isn't OWNER/ADMIN of the org. Reads still work.
-14. **`unauthenticated` mid-session** — the access token expired; refresh via `portal-api-jwt` and retry (don't re-prompt).
-15. **spkg not public** — local path or private URL fails. Publish and use API/public HTTPS URL **before** Deploy.
-16. **Background poll during login/password** — forbidden. Wait for user confirmation, then one check (`DeviceToken` / `HasDeploymentSecret`).
-17. **Batched DB questions** — ask host, port, user, database, schema, SSL **one at a time**.
-18. **`api_key_id` vs Portal token** — auto-created sink data-plane key ≠ Portal Bearer; don't conflate.
-19. **Output DB cold start** — serverless DB may take 1–2 min; retry `Deploy` a few times; distinguish from real auth/host errors.
+2. **Quality check via local sink** — using `substreams-sink-sql` or writing to local ClickHouse/Postgres “to test” is **wrong** for this gate. Quality check = **`substreams run` only** (command for the user; stdout/jsonl).
+3. **Unsupported engine** — hosted SQL is **PostgreSQL or ClickHouse only**. Never accept MySQL, SQLite, BigQuery, etc., or KV/files as the hosted destination; redirect to self-managed skills if needed.
+4. **Assuming StreamingFast provides the database** — it does **not**. StreamingFast hosts only the sink runner; the output DB is **always the user's own**, connected to remotely. `DeployDatabase` attaches/validates that existing connection — it never provisions a database (and its request has no `clickhouse_spec`, so ClickHouse connections are supplied inline in `Deploy`). If the user has no DB, they must stand one up (ClickHouse Cloud, managed Postgres, self-hosted with public DNS) first. Never promise to "provision/host/spin up/create" a database.
+5. **ClickHouse + Database Changes** — not supported. Use From proto definition (custom proto + annotations). Do not set `module_output_type` to `DatabaseChanges` when `outputConfig` is ClickHouse.
+6. **ClickHouse PK vs ORDER BY** — create-table fails with `Primary key must be a prefix of the sorting key` when proto has e.g. `primary_key` on `id` but `order_by_fields: [slot, id]`. **Fix the spkg proto** (PK fields must be the leading `order_by_fields`), rebuild, redeploy — not the ClickHouse connection. Full rule and examples: `substreams-sql` → “ClickHouse hard rule: primary key must prefix ORDER BY”.
+7. **ClickHouse reserved column names** — e.g. `index`, `keys` → `SYNTAX_ERROR` on CREATE. Rename in proto before first deploy (`substreams-sql`).
+8. **`substreams_dev_id` parse failure** — logs show `invalid Substreams Registry short package identifier "substreams-dev://..."`: switch Deploy/Update to `spkg.url` = `https://api.substreams.dev/v1/packages/<name>/<version>`.
+9. **Secret page 404 on admin.streamingfast.io** — use `https://thegraph.market/sinks/<id>/secret?output=clickhouse` (or `app.streamingfast.io`).
+10. **Unreachable host** — `localhost` / Docker service names fail from hosted runners.
+11. **Schema drift after proto rename** — `NO_SUCH_COLUMN_IN_TABLE` → Reset with `drop_schema: true` (confirm first).
+12. **Wrong output proto** — a SQL sink whose module doesn't emit `DatabaseChanges` runs in From proto definition mode (tables derived from your proto). If the user expected `db_out`/`DatabaseChanges` on **Postgres**, send them to `substreams-sql` first.
+13. **`organization_id` mismatch** — the Bearer token is pinned to one org; every call's `organization_id` must equal it, or it's rejected. Re-login to target a different org.
+14. **`permission_denied` on a mutation** — the logged-in user isn't OWNER/ADMIN of the org. Reads still work.
+15. **`unauthenticated` mid-session** — the access token expired; refresh via `portal-api-jwt` and retry (don't re-prompt).
+16. **spkg not public** — local path or private URL fails. Publish and use API/public HTTPS URL **before** Deploy.
+17. **Background poll during login/password** — forbidden. Wait for user confirmation, then one check (`DeviceToken` / `HasDeploymentSecret`).
+18. **Batched DB questions** — ask host, port, user, database, schema, SSL **one at a time**.
+19. **`api_key_id` vs Portal token** — auto-created sink data-plane key ≠ Portal Bearer; don't conflate.
+20. **Output DB cold start** — serverless DB may take 1–2 min; retry `Deploy` a few times; distinguish from real auth/host errors.
+21. **Inventing an ops request from a name** — the user says “scale `raydium-swaps`”, but every call needs the server `deployment_id`. Resolve it with `ListDeployments` first; never guess a slug.
 
 ## Resources
 

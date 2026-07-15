@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `substreams-hosted-sink` (v1.12.2): document the ops path — resolve deployment name → `deployment_id` via `ListDeployments` (never guess a slug), add the `SetReplica` request body, and point status/lag questions at `GetDeploymentState`; the quality gate now allows correcting false premises in the offer turn (no second question), rejects an option-2 answer that isn't `substreams run`, and clarifies that a local sink is legitimate work but not a substitute for the gate; fix duplicated pitfall numbering.
 - `substreams-hosted-sink` (v1.12.1): typo “Nerver” → “Never ask for a DSN”; add ClickHouse `Deploy` example; clarify `GoogleCloudSqlPrivate` is out of the standard agent path; curl examples use `$DEPLOYMENT_ID` from `CreateDeployment` (not invented slugs).
 - README: hosted-sink blurb no longer says `DeployDatabase` provisions a DB or that agents pick `api_key_id` (attach user DB; key is auto-created).
 - `portal-api` (v1.16.2): confirmation protocol no longer groups `DeployDatabase` with “provisions billable infrastructure” — attach/validate only; billable runner is `Deploy`.

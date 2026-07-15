@@ -63,7 +63,7 @@ For a StreamingFast-hosted sink (no infrastructure to manage), see `substreams-h
 ### ✅ Substreams Hosted Sink (`substreams-hosted-sink`)
 Deploy and operate a Substreams sink on StreamingFast-hosted infrastructure — entirely through the Portal API `HostedService`, no binary to run. Covers:
 - **Deployment type** — SQL sink (Postgres/ClickHouse) vs foundational store
-- **Deploy flow** — build the `Deploy` request from a `.spkg` URL, provision the output DB (`DeployDatabase`), pick the `api_key_id` the sink streams under
+- **Deploy flow** — public `.spkg` URL, attach the **user's** Postgres/ClickHouse connection (`DeployDatabase` for Postgres attach/validate only — SF never provisions a DB), secret page for password, then `Deploy` (data-plane `api_key_id` is auto-created)
 - **Rollout & monitoring** — `GetDeploymentState` head block / lag, events, logs
 - **Operate** — scale/pause (`SetReplica`), reconfigure (`UpdateDeploymentConfig`), reset and tear down — with confirmation on destructive actions
 - **Auth** — device-code login via `portal-api-jwt`; endpoint reference in `portal-api`

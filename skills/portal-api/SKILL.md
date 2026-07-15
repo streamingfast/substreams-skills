@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.16.1
+  version: 1.16.2
   author: StreamingFast
   documentation: https://docs.substreams.dev
 ---
@@ -889,7 +889,7 @@ Humanize `head_block_time_drift` as "X behind real-time" (seconds → "Ns", "Nm"
 Read routes never need confirmation. Every mutating `HostedService` route does. Before calling one:
 
 1. **Restate the action** in plain language: which deployment (name + id), which org, and exactly what changes.
-2. **Flag the blast radius.** Mark destructive/irreversible ops explicitly — `ResetDeployment` (drops or truncates the DB), `Undeploy`, `DeleteDeploymentConfig`, `CleanupOrphanedDeployment` — and note when an action provisions billable infrastructure (`Deploy`, `DeployDatabase`) or pauses processing (`SetReplica count:0`).
+2. **Flag the blast radius.** Mark destructive/irreversible ops explicitly — `ResetDeployment` (drops or truncates the **user's** DB schema/tables), `Undeploy`, `DeleteDeploymentConfig`, `CleanupOrphanedDeployment`. Note when an action creates **billable hosted sink-runner** infrastructure (`Deploy`) or pauses processing (`SetReplica count:0`). **`DeployDatabase` does not provision a database** — it only attaches/validates the user's existing Postgres connection (billable impact is the sink runner via `Deploy`, not a StreamingFast-hosted DB).
 3. **Get an explicit yes** for that specific action. A general "manage my sinks" request is not consent to a destructive call. Don't batch multiple mutations behind one confirmation.
 4. **Secrets**: never accept a DB password inline or put one in a request you compose — route it through the stored-secret flow ("Provide the database password" above). Never echo DB passwords or raw API-key secrets back; redact when summarizing the body.
 5. **After the call**, report `success`/`message`, then offer a `GetDeploymentState` follow-up so the user sees the result.
@@ -986,7 +986,7 @@ Deploy confirmation must restate how quality was handled (`tested_ok` / `user_ve
 
 **Password:** secure stored-secret flow only — see below. Sequence: (1) mint `deployment_id` via `CreateDeployment`; (2) user stages password on the secure page — **wait for user confirmation**, then **one** `HasDeploymentSecret` check (no background poll); (3) confirm plan; (4) `Deploy` with `use_stored_secret: true` and empty `password`. Do **not** supply an API key. **`Deploy` may return HTTP 200 + empty `{}`** — treat as success and follow up with `GetDeploymentState`. If the first `Deploy` fails with a connection timeout/refused against a serverless output DB (cold start), retry 2–3 times waiting ~30–60s — tell the user the DB may be waking up; only treat auth/host-not-found as hard failures immediately.
 
-### "Provide the database password" / deploy the output DB (mutation — confirm first)
+### "Provide the database password" / attach the output DB (mutation — confirm first)
 
 The database password must never pass through you. Use this flow so the user enters it once, directly in the browser:
 

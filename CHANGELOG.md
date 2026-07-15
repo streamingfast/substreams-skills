@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `substreams-hosted-sink` (v1.12.1): typo “Nerver” → “Never ask for a DSN”; add ClickHouse `Deploy` example; clarify `GoogleCloudSqlPrivate` is out of the standard agent path; curl examples use `$DEPLOYMENT_ID` from `CreateDeployment` (not invented slugs).
+- README: hosted-sink blurb no longer says `DeployDatabase` provisions a DB or that agents pick `api_key_id` (attach user DB; key is auto-created).
+- `portal-api` (v1.16.2): confirmation protocol no longer groups `DeployDatabase` with “provisions billable infrastructure” — attach/validate only; billable runner is `Deploy`.
 - `substreams-solana` (v1.4.1): crate matrix updated to **`substreams 0.7` + `substreams-solana 0.15`** (legacy `0.6`+`0.14.x` only); clarify same-layout multi-disc messages (e.g. swap/swap_v2); index modules use `kind: blockIndex`; manifest example includes `package.url`/`description`.
 - `substreams-dev` / legacy Solana notes / `substreams-convert`: align Solana Cargo pins with the matched-pair matrix (was incorrectly `0.6`+`0.15` or still on `0.14.3`).
 - `substreams-sink` (v1.3.1): correct Go quickstart to monorepo API (`github.com/streamingfast/substreams/sink`, `NewFromViper` + `NewSinkerHandlers`); fix JS quickstart to official `streamBlocks` + `createGrpcTransport`; note entity-change v2 still pins `substreams ^0.6`; add skill routing vs sql/deploy-local/hosted-sink; align JS reference with gRPC transport.

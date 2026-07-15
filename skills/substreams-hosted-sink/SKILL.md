@@ -13,7 +13,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.12.0
+  version: 1.12.1
   author: StreamingFast
   documentation: https://docs.substreams.dev/how-to-guides/sinks
 ---
@@ -157,6 +157,7 @@ Mentally answer: **Is `OUTPUT_TEST_STATUS` set?**
 - MySQL / MariaDB / SQLite / BigQuery / Snowflake / Redshift / DuckDB / any other SQL dialect
 - `substreams-sink-kv` destinations
 - `substreams-sink-files` / object storage / PubSub / webhooks as the hosted runner target
+- **`GoogleCloudSqlPrivate`** — appears in the `OutputConfig` proto (`portal-api`) for private GCP Cloud SQL networking; **not** part of the standard agent-hosted Postgres/ClickHouse path. Do not invent Cloud SQL private configs unless product docs explicitly enable it for the user's org.
 
 If the user wants KV, files, or a self-managed sink binary, stop and use `substreams-sink-deploy-local` or `substreams-sink` instead. If they need help choosing among SQL / KV / files, use the choice tree in `substreams-sql` (Step 1), then return here only when they commit to hosted **SQL** into Postgres or ClickHouse.
 
@@ -266,7 +267,7 @@ When login is needed: show the login callout **alone**, **end the turn**, and **
 
 ### 3. Collect database connection (one field per turn)
 
-Nerver ask for a DSN
+**Never ask for a DSN** — collect discrete fields (below), not a connection string.
 
 If the user brings their own DB, ask **one question at a time** (choices + **Other / custom**):
 
@@ -317,10 +318,11 @@ Password must never ride in Deploy. User stages it in the browser:
 Optional `DeployDatabase` (after secret exists) — this **attaches and validates the user's existing database connection**, it does not create a database. `use_stored_secret: true` and empty password. Note the request only carries a `postgres_spec` field (there is no `clickhouse_spec`); for ClickHouse, supply the connection inline in `Deploy` step 5 instead:
 
 ```bash
+# $DEPLOYMENT_ID = value returned by CreateDeployment (server UUID — do not invent)
 curl -sS -X POST "$BASE_URL/sf.portalapi.v1.HostedService/DeployDatabase" \
   -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
   -d '{
-        "deployment_id": "my-sink",
+        "deployment_id": "'"$DEPLOYMENT_ID"'",
         "organization_id": "'"$ORG_ID"'",
         "use_stored_secret": true,
         "postgres_spec": { "server": "...", "port": 5432, "user": "...", "database": "...", "schema": "public", "sslmode": "require" }
@@ -348,13 +350,15 @@ If you cannot fill that line from a real offer turn this session, **stop** and r
 
 **Network string (sink_sql):** use the Substreams network id, e.g. `solana` / `solana-mainnet-beta` for Solana, `mainnet` / `ethereum-mainnet` for Ethereum — match what `substreams run --network` expects for that package.
 
+**PostgreSQL** (Database Changes example — use From-proto `module_output_type` when not emitting `DatabaseChanges`):
+
 ```bash
-# Prefer spkg.url (API download) for hosted runners:
-# "url": "https://api.substreams.dev/v1/packages/<package>/<version>"
+# Prefer spkg.url (API download) for hosted runners.
+# $DEPLOYMENT_ID from CreateDeployment — never invent a slug.
 curl -sS -X POST "$BASE_URL/sf.portalapi.v1.HostedService/Deploy" \
   -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
   -d '{
-        "deployment_id": "my-sink",
+        "deployment_id": "'"$DEPLOYMENT_ID"'",
         "name": "My ETH transfers sink",
         "organization_id": "'"$ORG_ID"'",
         "use_stored_secret": true,
@@ -374,8 +378,42 @@ curl -sS -X POST "$BASE_URL/sf.portalapi.v1.HostedService/Deploy" \
       }'
 ```
 
+**ClickHouse** (From proto definition only — never `DatabaseChanges`; connection is always inline in Deploy, not via `DeployDatabase`):
+
+```bash
+curl -sS -X POST "$BASE_URL/sf.portalapi.v1.HostedService/Deploy" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+  -d '{
+        "deployment_id": "'"$DEPLOYMENT_ID"'",
+        "name": "My Solana CH sink",
+        "organization_id": "'"$ORG_ID"'",
+        "use_stored_secret": true,
+        "deployment_request": {
+          "sink_sql_deployment": {
+            "spkg": { "url": "https://api.substreams.dev/v1/packages/my-package/v0.1.0" },
+            "network": "solana",
+            "replica": 1,
+            "execution_config": {
+              "start_block": 250000000,
+              "output_module": "db_out",
+              "module_output_type": "proto:my.package.v1.Events"
+            },
+            "outputConfig": {
+              "clickhouse": {
+                "server": "xxx.clickhouse.cloud",
+                "port": 9440,
+                "user": "default",
+                "database": "default",
+                "secure": true
+              }
+            }
+          }
+        }
+      }'
+```
+
 Notes:
-- **No `password` in `outputConfig`** — it's staged in vault (step 3) and resolved server-side via `use_stored_secret: true`. Sending an inline password from an agent token is rejected.
+- **No `password` in `outputConfig`** — it's staged in vault (step 4) and resolved server-side via `use_stored_secret: true`. Sending an inline password from an agent token is rejected.
 - `outputConfig` is intentionally **camelCase** in the JSON (it's named that in the proto); many other response fields may arrive as **camelCase** from Connect JSON — accept both snake_case and camelCase when parsing (`deploymentId` / `deployment_id`, etc.).
 - **`Deploy` success** is often HTTP **200** with an **empty body** `{}` (empty `DeploymentResult`). Treat that as success; confirm with `GetDeploymentState`, not by expecting a rich Deploy payload.
 - **Output DB cold start** — the server runs a connection probe against the output DB before it accepts the deploy. A serverless ClickHouse (and some Postgres) idles its compute and can take **1–2 minutes to wake**, so the first probe may come back as a connection **timeout / refused / unreachable** error. This is transient: **retry the `Deploy` call** (2–3 attempts, waiting ~30–60 s between them) rather than reporting failure. Tell the user the DB is waking up and you're retrying. Only surface a hard failure after the retries are exhausted, or immediately if the error is clearly not transient (auth rejected, host not found, bad credentials).
@@ -388,7 +426,7 @@ Poll `GetDeploymentState` until it's healthy; lead with the headline status and 
 ```bash
 curl -sS -X POST "$BASE_URL/sf.portalapi.v1.HostedService/GetDeploymentState" \
   -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
-  -d '{"deployment_id":"my-sink","organization_id":"'"$ORG_ID"'"}'
+  -d '{"deployment_id":"'"$DEPLOYMENT_ID"'","organization_id":"'"$ORG_ID"'"}'
 ```
 
 If it goes to `ERROR` or crashloops, pull `GetDeploymentEvents` (recent lifecycle events) and `Logs` (`tail_lines`, `previous:true` for a crashed container) to diagnose. List everything with `ListDeployments`. **If the logs/events show an output-DB connection timeout** (a serverless ClickHouse/Postgres still waking up), treat it as transient: keep polling for another minute or two — the sink retries the connection itself once the DB is up — before treating it as a real failure.

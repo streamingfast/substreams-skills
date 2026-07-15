@@ -40,7 +40,6 @@ package main
 import (
     "context"
     "fmt"
-    "os"
 
     "github.com/spf13/cobra"
     "github.com/spf13/pflag"
@@ -49,6 +48,7 @@ import (
     "github.com/streamingfast/logging"
     pbsubstreamsrpc "github.com/streamingfast/substreams/pb/sf/substreams/rpc/v2"
     "github.com/streamingfast/substreams/sink"
+    "go.uber.org/zap"
 
     // Import your output module's protobuf type
     pb "your-package/pb"
@@ -144,10 +144,8 @@ func handleBlockScopedData(
         return fmt.Errorf("unmarshal error: %w", err)
     }
 
-    // 2. Access block metadata
+    // 2. Access block metadata (also: data.Clock.Id, data.Clock.Timestamp.AsTime())
     blockNum := data.Clock.Number
-    blockID := data.Clock.Id
-    blockTime := data.Clock.Timestamp.AsTime()
 
     // 3. Process the data
     if err := processData(output, blockNum); err != nil {
@@ -161,7 +159,10 @@ func handleBlockScopedData(
 
     // 5. Optional: Check liveness
     if isLive != nil && *isLive {
-        zlog.Info("processing live block", zap.Uint64("block", blockNum))
+        zlog.Info("processing live block",
+            zap.Uint64("block", blockNum),
+            zap.String("block_id", data.Clock.Id),
+        )
     }
 
     return nil
@@ -205,28 +206,26 @@ func handleBlockUndoSignal(
 
 ### File-Based Cursor (Simple)
 
+**Use the SDK's own helpers — do not hand-roll this.** `sink.ReadCursor` / `sink.WriteCursor` already exist and are strictly safer:
+
 ```go
 const cursorFile = "cursor.txt"
 
+// ReadCursor returns (nil, nil) when the file is absent. A nil *sink.Cursor IS
+// a valid blank cursor, so it can be passed straight to sinker.Run.
 func loadCursor() (*sink.Cursor, error) {
-    data, err := os.ReadFile(cursorFile)
-    if err != nil {
-        if os.IsNotExist(err) {
-            return sink.NewBlankCursor(), nil
-        }
-        return nil, fmt.Errorf("read cursor: %w", err)
-    }
-    cursor, err := sink.NewCursor(string(data))
-    if err != nil {
-        return nil, fmt.Errorf("parse cursor: %w", err)
-    }
-    return cursor, nil
+    return sink.ReadCursor(cursorFile)
 }
 
 func persistCursor(cursor *sink.Cursor) error {
-    return os.WriteFile(cursorFile, []byte(cursor.String()), 0644)
+    return sink.WriteCursor(cursorFile, cursor)
 }
 ```
+
+Why not `os.ReadFile` + `sink.NewCursor(string(data))` / `os.WriteFile`:
+
+- `ReadCursor` does a `strings.TrimSpace` first. Without it, a single trailing newline in `cursor.txt` is a hard failure — `sink.NewCursor("\n")` returns `unable to decode: decryption failed`.
+- `WriteCursor` writes to a temp file and `os.Rename`s it, so the write is atomic. A plain `os.WriteFile` interrupted by a crash leaves a truncated cursor — exactly the "data loss after restart" symptom in Troubleshooting below.
 
 ### Database Cursor (Production)
 
@@ -317,12 +316,16 @@ import (
 
     "github.com/spf13/cobra"
     "github.com/spf13/pflag"
-    "github.com/streamingfast/cli"
     . "github.com/streamingfast/cli"
     "github.com/streamingfast/logging"
     pbsubstreamsrpc "github.com/streamingfast/substreams/pb/sf/substreams/rpc/v2"
     "github.com/streamingfast/substreams/sink"
     "go.uber.org/zap"
+
+    // Required: registers the "postgres" driver for sql.Open. Without this blank
+    // import the sink compiles but dies at startup with
+    // `sql: unknown driver "postgres" (forgotten import?)`.
+    _ "github.com/lib/pq"
 
     pb "your-package/pb"
 )

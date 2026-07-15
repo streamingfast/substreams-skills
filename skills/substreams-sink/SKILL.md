@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.3.1
+  version: 1.4.0
   author: StreamingFast
   documentation: https://substreams.streamingfast.io
 ---
@@ -114,22 +114,23 @@ syntax = "proto3";
 package sf.substreams.sink.entity.v1;
 
 message EntityChanges {
-  repeated EntityChange entity_changes = 1;
+  repeated EntityChange entity_changes = 5;  // NOT 1 — consumers read field 5
 }
 
 message EntityChange {
+  string entity = 1;
+  string id     = 2;
+  // Deprecated, this is not used within `graph-node`.
+  uint64 ordinal = 3;
   enum Operation {
-    UNSET      = 0;
-    CREATE     = 1;
-    UPDATE     = 2;
-    DELETE     = 3;
-    FINAL      = 4;
+    OPERATION_UNSPECIFIED = 0;
+    OPERATION_CREATE      = 1;
+    OPERATION_UPDATE      = 2;
+    OPERATION_DELETE      = 3;
+    OPERATION_FINAL       = 4;
   }
-  string entity          = 1;
-  string id              = 2;
-  uint64 ordinal         = 3;
-  Operation operation    = 4;
-  repeated Field fields  = 5;
+  Operation operation   = 4;
+  repeated Field fields = 5;
 }
 
 message Value {
@@ -138,8 +139,9 @@ message Value {
     string bigdecimal = 2;
     string bigint     = 3;
     string string     = 4;
-    bytes  bytes      = 5;
+    string bytes      = 5;  // hex string, NOT proto `bytes`
     bool   bool       = 6;
+    int64  timestamp  = 7;
     Array  array      = 10;
   }
 }
@@ -149,13 +151,16 @@ message Array {
 }
 
 message Field {
-  string name      = 1;
-  Value  old_value = 2;  // previous value — required for UPDATE/undo operations
-  Value  new_value = 3;
+  string name = 1;
+  optional Value new_value = 3;
+  // Deprecated, this is not used within `graph-node`.
+  optional Value old_value = 5;
 }
 ```
 
-> **Wire compatibility:** Both the package name AND the exact message/field definitions (numbers + types) must match. `package sf.substreams.sink.entity.v1;` is required — do NOT change it to `sf.substreams.sink.database.v1` (that's the SQL sink). Copy this proto verbatim from the [canonical source](https://github.com/streamingfast/substreams-sink-entity-changes/blob/develop/proto/sf/substreams/sink/entity/v1/entity.proto) — do not simplify field types or the output will decode as empty values in Graph Node.
+> **Field numbers are load-bearing.** `entity_changes` is **5**, not 1; `old_value` is **5**, not 2; `Value.bytes` is a **`string`** (hex), not proto `bytes`. Getting any of these wrong produces a module that builds, streams, and silently writes **zero entities** — the consumer decodes a field number you never wrote. `substreams run` will still look correct, because it decodes with your own package's descriptor; the mismatch only surfaces against a real Graph Node.
+
+> **Wire compatibility:** Both the package name AND the exact message/field definitions (numbers + types) must match. `package sf.substreams.sink.entity.v1;` is required — do NOT change it to `sf.substreams.sink.database.v1` (that's the SQL sink). The block above is a verbatim copy of the [canonical source](https://github.com/streamingfast/substreams-sink-entity-changes/blob/develop/proto/sf/substreams/sink/entity/v1/entity.proto); re-copy from there rather than retyping, and do not simplify field types or renumber fields.
 
 **2. Reference in manifest** (`substreams.yaml`):
 
@@ -185,8 +190,9 @@ use crate::pb::sf::substreams::sink::entity::v1::value::Typed;
 // `Field.new_value` and `old_value` are `Value` messages, so the prost-generated
 // Rust type is `Option<Value>` — you cannot assign a raw String/Vec<u8>/u64 directly.
 // Wrap each scalar in the appropriate `Typed::*` oneof variant. Helpers below
-// cover the common cases; add `Typed::Bool`, `Typed::Bytes`, `Typed::Int32`,
-// `Typed::Bigdecimal`, `Typed::Array` as needed for your schema.
+// cover the common cases; add `Typed::Bool`, `Typed::Int32`, `Typed::Bigdecimal`,
+// `Typed::Timestamp` (i64), `Typed::Array` as needed for your schema.
+// Note `Typed::Bytes` takes a `String` (hex), not a `Vec<u8>` — see the proto above.
 fn val_string(s: impl Into<String>) -> Option<Value> {
     Some(Value { typed: Some(Typed::String(s.into())) })
 }
@@ -247,7 +253,6 @@ import (
 
     "github.com/spf13/cobra"
     "github.com/spf13/pflag"
-    "github.com/streamingfast/cli"
     . "github.com/streamingfast/cli"
     "github.com/streamingfast/logging"
     pbsubstreamsrpc "github.com/streamingfast/substreams/pb/sf/substreams/rpc/v2"
@@ -321,7 +326,15 @@ See [references/go-sink.md](./references/go-sink.md) for complete guide.
 
 ### JavaScript (Node.js)
 
-Prefer **`createGrpcTransport`** (faster for large streams) over Connect HTTP. Official pattern:
+Prefer **`createGrpcTransport`** (faster for large streams) over Connect HTTP. Requires `"type": "module"` in `package.json`. Pin your deps — the unpinned install fails to resolve:
+
+```bash
+npm install @substreams/core@0.16.0 @connectrpc/connect@1.3.0 @connectrpc/connect-node@1.3.0
+```
+
+`@connectrpc/connect` 2.x peers `@bufbuild/protobuf` ^2, but `@substreams/core` still peers ^1 — installing both unpinned gives `ERESOLVE`.
+
+Official pattern:
 
 ```javascript
 import {
@@ -350,21 +363,30 @@ const request = createRequest({
     substreamPackage: pkg,
     outputModule: MODULE,
     productionMode: true,
-    startBlockNum: "17000000",
+    startBlockNum: 17000000n, // number | bigint — a string is a TS type error
     stopBlockNum: "+1000",
     startCursor: (await getCursor()) ?? undefined,
 });
 
+let blockCount = 0;
 for await (const response of streamBlocks(transport, request)) {
     const msg = response.message;
     if (msg.case === "blockScopedData") {
         // Process msg.value.output, then persist msg.value.cursor AFTER success
         await writeCursor(msg.value.cursor);
+        blockCount++;
     } else if (msg.case === "blockUndoSignal") {
-        // Rewind to msg.value.lastValidBlock, persist msg.value.lastValidCursor
+        // Rewind to msg.value.lastValidBlock.number, persist lastValidCursor
         await writeCursor(msg.value.lastValidCursor);
+    } else if (msg.case === "fatalError") {
+        // Server-side module failure — without this branch it looks like success
+        throw new Error(`fatal error in module ${msg.value.module}: ${msg.value.reason}`);
     }
 }
+
+// A clean exit with zero blocks is NOT success — on createGrpcTransport a bad
+// token ends the stream silently instead of throwing Unauthenticated.
+if (blockCount === 0) throw new Error("stream ended with 0 blocks — check your token");
 ```
 
 Wrap the stream loop in retry/backoff for normal disconnects. See [references/javascript-sink.md](./references/javascript-sink.md) for complete guide.
@@ -404,7 +426,12 @@ See [references/python-sink.md](./references/python-sink.md) for complete guide.
 Reference implementation (no official SDK). Stream wrapper shape from the examples:
 
 ```rust
+use futures03::StreamExt; // brings `stream.next()` into scope
 use substreams_stream::{BlockResponse, SubstreamsStream};
+
+// `substreams_stream` / `substreams` here are LOCAL modules vendored from the
+// examples repo (`mod substreams_stream;`) — there is no `substreams-stream`
+// crate, and do NOT `cargo add substreams` (that's the WASM module crate).
 
 // SubstreamsStream::new(endpoint, cursor, package, output_module, start_block, stop_block)
 let mut stream = SubstreamsStream::new(
@@ -477,22 +504,26 @@ BlockUndoSignal {
 3. Continue streaming (new blocks will follow automatically)
 
 **Final blocks only mode** (recommended for most sinks):
-- Set `final_blocks_only: true` in request
+- Set `final_blocks_only: true` in request (`--final-blocks-only` on the CLI, `finalBlocksOnly: true` in JS)
 - Only receive blocks that cannot be reorganized
 - Eliminates need for undo handling
-- Trade-off: ~2-3 minutes delay from chain tip
+- Trade-off: you lag the chain tip by that chain's finality distance — ~13 min on Ethereum mainnet (2 epochs), ~seconds on Solana, varies elsewhere
 
 ### Error Handling & Retry
 
 **Fatal errors (do not retry):**
 - `Unauthenticated` - Invalid or expired token
 - `InvalidArgument` - Bad request parameters
-- `Internal` - Server-side bug
 
 **Retryable errors (implement exponential backoff):**
 - `Unavailable` - Server temporarily unavailable
 - `ResourceExhausted` - Rate limited
+- `Internal` - usually a transient stream reset (`RST_STREAM`) on long-lived streams, not a server bug — retry it
 - Connection timeouts
+
+> The official Rust reference implementation treats **only** `Unauthenticated` as fatal and reconnects on everything else. Do not classify `Internal` as fatal: it is the standard gRPC surfacing of a routine disconnect, and treating it as fatal kills sinks on exactly the reconnect they should ride out.
+
+**A clean stream end is not proof of success.** Handle the `fatal_error` message of the response oneof explicitly — a server-side module panic arrives there, and a `switch` that only covers `block_scoped_data` / `block_undo_signal` will fall through and report success. Likewise, if you asked for a range and processed zero blocks, treat that as an error rather than a clean exit.
 
 **Exponential backoff pattern:**
 ```
@@ -511,11 +542,15 @@ Jitter: Add random 0-100ms
 | Use case | Sinks | Testing, debugging |
 
 **Always use production mode for sinks:**
-```go
-sink.WithProductionMode()  // Go
-production_mode=True       // Python
-productionMode: true       // JavaScript
-```
+
+| Language | How |
+|---|---|
+| Python | `production_mode=True` — field on `service_pb2.Request` |
+| JavaScript | `productionMode: true` — option to `createRequest` |
+| Rust | `production_mode: true` — field on the v3 `Request` |
+| Go | already the default — see below |
+
+In Go, production mode is already the **default** with `sink.NewFromViper` — just do not pass `--development-mode`. (There is no `sink.WithProductionMode()`; the `sink.With*` options do not include one, and all of them are deprecated in favour of configuring `SinkerConfig` via `sink.NewFromConfig`.)
 
 ## Common Endpoints
 
@@ -525,13 +560,13 @@ productionMode: true       // JavaScript
 | Ethereum Sepolia | `sepolia.eth.streamingfast.io:443` |
 | Polygon | `polygon.streamingfast.io:443` |
 | Arbitrum One | `arb-one.streamingfast.io:443` |
-| Optimism | `optimism.streamingfast.io:443` |
-| Base | `base.streamingfast.io:443` |
-| BSC | `bsc.streamingfast.io:443` |
-| Solana | `mainnet.sol.streamingfast.io:443` |
-| Near | `mainnet.near.streamingfast.io:443` |
+| Optimism | `mainnet.optimism.streamingfast.io:443` |
+| Base Mainnet | `base-mainnet.streamingfast.io:443` |
+| BNB | `bnb.streamingfast.io:443` |
+| Solana Mainnet-Beta | `mainnet.sol.streamingfast.io:443` |
+| NEAR Mainnet | `mainnet.near.streamingfast.io:443` |
 
-Full list: [thegraph.market/supported-networks](https://thegraph.market/supported-networks)
+Full list: [docs.substreams.dev/reference-material/chains-and-endpoints](https://docs.substreams.dev/reference-material/chains-and-endpoints) (raw data: [TheGraphNetworksRegistry.json](https://networks-registry.thegraph.com/TheGraphNetworksRegistry.json))
 
 ## Block Range Syntax
 
@@ -539,8 +574,9 @@ Full list: [thegraph.market/supported-networks](https://thegraph.market/supporte
 # Explicit range
 --start-block 17000000 --stop-block 17001000
 
-# From manifest initialBlock
---start-block : --stop-block 17001000
+# From manifest initialBlock — omit --start-block entirely (empty = use initialBlock).
+# There is no `:` syntax; `--start-block :` fails with "start block is invalid".
+--stop-block 17001000
 
 # Relative stop (process 1000 blocks)
 --start-block 17000000 --stop-block +1000
@@ -603,6 +639,8 @@ buf generate buf.build/streamingfast/substreams --include-imports
 - Check the output module name is correct
 - Ensure the block range contains relevant data
 - Try a known-good block range first
+- **JS:** a silent clean exit with zero blocks on `createGrpcTransport` usually means a **bad token** — the trailers-only `Unauthenticated` is swallowed. Re-run with `createConnectTransport` to surface the real `ConnectError`.
+- **graph_out writing nothing?** Check your `EntityChanges` proto field numbers against the canonical proto — `entity_changes` must be **5**. `substreams run` will look fine either way.
 
 ### Performance Issues
 

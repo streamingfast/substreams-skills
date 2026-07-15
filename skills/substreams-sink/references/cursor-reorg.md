@@ -398,7 +398,7 @@ Request {
 }
 ```
 
-**Trade-off:** ~2-3 minute delay from chain tip, but no reorg handling needed.
+**Trade-off:** you lag the chain tip by that chain's finality distance, but no reorg handling is needed. The delay is chain-specific — ~13 minutes on Ethereum mainnet (finality is 2 epochs), ~seconds on Solana, and varies elsewhere. Do not assume a fixed couple of minutes.
 
 ## Error Recovery
 

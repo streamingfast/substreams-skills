@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `substreams-solana` (v1.4.2): every Rust snippet in the skill now compiles against the recommended `substreams 0.7.6` + `substreams-solana 0.15.0` pair (wasm32, release). The `index_from_block` index-module example did not build — `ix.accounts()` yields **owned** `Address` values and `Address` has no `Deref`, so `if *a == TRACKED` failed with `E0614`; drop the `*`. Correct the version-mixing claim: `0.6`+`0.15` (and `0.7`+`0.14`) do **not** produce "dual trees / link errors" — both compile and emit valid handler exports while cargo silently resolves two `substreams` copies, so a green build is not evidence the pins are right. Fix type comments (`ix.data()` is `&Vec<u8>`, `ix.program_id()` is `Address`, not `[u8; 32]`) and add troubleshooting rows for `E0614` and duplicate `substreams` in `cargo tree`.
 - `substreams-hosted-sink` (v1.12.1): typo “Nerver” → “Never ask for a DSN”; add ClickHouse `Deploy` example; clarify `GoogleCloudSqlPrivate` is out of the standard agent path; curl examples use `$DEPLOYMENT_ID` from `CreateDeployment` (not invented slugs).
 - README: hosted-sink blurb no longer says `DeployDatabase` provisions a DB or that agents pick `api_key_id` (attach user DB; key is auto-created).
 - `portal-api` (v1.16.2): confirmation protocol no longer groups `DeployDatabase` with “provisions billable infrastructure” — attach/validate only; billable runner is `Deploy`.

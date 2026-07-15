@@ -37,13 +37,21 @@ for trx in block.transactions() {
 
 ```rust
 for ix in trx.walk_instructions() {
-    let program_id = ix.program_id(); // [u8; 32] comparable
-    let data = ix.data();             // &[u8]
-    let accounts = ix.accounts();     // resolved accounts for this ix
+    let program_id = ix.program_id(); // Address<'_> — compares directly against [u8; 32]
+    let data = ix.data();             // &Vec<u8> (slices/indexes like &[u8])
+    let accounts = ix.accounts();     // Vec<Address<'_>>, Display/to_string = base58
 }
 ```
 
 Walks **top-level and inner (CPI)** instructions. Required for almost all DeFi: routers and aggregators invoke target programs as **inner** instructions.
+
+`Address` has **no** `Deref`. Compare it directly — `*addr` is a compile error unless
+you are already holding a reference:
+
+```rust
+for a in ix.accounts() { if a == TRACKED { … } }          // a: Address    → no `*`
+accounts.iter().any(|a| *a == TRACKED)                    // a: &Address   → `*` ok
+```
 
 ### Wrong — compiled message instructions only
 
@@ -190,7 +198,7 @@ fn index_from_block(block: Block) -> Result<Keys, Error> {
             if ix.program_id() == PROGRAM {
                 seen_program = true;
                 for a in ix.accounts() {
-                    if *a == TRACKED {
+                    if a == TRACKED {
                         keys.keys.push(format!("account:{}", a));
                     }
                 }

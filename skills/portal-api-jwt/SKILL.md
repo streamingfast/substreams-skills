@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.5.1
+  version: 1.5.2
   author: StreamingFast
   documentation: https://docs.substreams.dev
 ---
@@ -43,9 +43,10 @@ all of which are **public** (no auth header needed).
 | `BASE_URL` | `https://admin.streamingfast.io` | User says "local"/"localhost" → `http://localhost:9000`. Other host → use as-is. |
 
 All three endpoints are `POST` of a JSON body to `{BASE_URL}/sf.portalapi.v1.PortalApi/<Method>`.
-Prefer **snake_case** in request bodies. **Responses may use camelCase** — parse both.
-Enum values are full strings (e.g. `"DEVICE_TOKEN_STATUS_APPROVED"`). Call with the
-Bash tool + `curl`, pipe through `jq`.
+Use **snake_case** in request bodies (`{"device_code": "…"}`). **Responses come back
+camelCase**, with 64-bit numbers as strings — read defensively and `tonumber` before
+arithmetic. Enum values are full strings (e.g. `"DEVICE_TOKEN_STATUS_APPROVED"`). Call
+with the Bash tool + `curl`, pipe through `jq`.
 
 ## Step 1 — Start the login
 
@@ -55,28 +56,28 @@ curl -sS -X POST "$BASE_URL/sf.portalapi.v1.PortalApi/DeviceAuthorize" \
   -d '{"client_name": "Claude agent"}'
 ```
 
-Response (wire JSON may be **snake_case or camelCase** — parse both):
+Response — the live API returns **camelCase**, and `expiresIn` / `interval` are
+**strings**, not numbers (proto3 maps `int64` to JSON string):
 
 ```json
 {
-  "device_code": "device_9f8c…",
   "deviceCode": "device_9f8c…",
-  "user_code": "BCDF-GH2J",
   "userCode": "BCDF-GH2J",
-  "verification_uri": "https://thegraph.market/device",
   "verificationUri": "https://thegraph.market/device",
-  "verification_uri_complete": "https://thegraph.market/device?user_code=BCDF-GH2J",
   "verificationUriComplete": "https://thegraph.market/device?user_code=BCDF-GH2J",
-  "expires_in": 600,
   "expiresIn": "600",
-  "interval": 5
+  "interval": "5"
 }
 ```
 
-Keep `device_code` / `deviceCode`, `interval`, and `expires_in` / `expiresIn` in memory.
-**Do not print the `device_code`** — it is the agent's secret half of the handshake.
-Use `verification_uri_complete` (or camelCase) as returned; production often points at
-**thegraph.market**, not only admin.streamingfast.io.
+Read fields defensively (`.deviceCode // .device_code`) in case a deployment emits
+snake_case, and **coerce `interval` / `expiresIn` with `tonumber`** before any
+arithmetic or `sleep`.
+
+Keep `deviceCode`, `interval`, and `expiresIn` in memory.
+**Do not print the `deviceCode`** — it is the agent's secret half of the handshake.
+Use `verificationUriComplete` as returned; production points at
+**thegraph.market**, not admin.streamingfast.io.
 
 ## Step 2 — Send the user to approve
 
@@ -132,29 +133,52 @@ curl -sS -X POST "$BASE_URL/sf.portalapi.v1.PortalApi/DeviceToken" \
   -d '{"device_code": "device_9f8c…"}'
 ```
 
+On success the call returns HTTP 200 with a `status` field:
+
 | `status` | Meaning | Action |
 |---|---|---|
 | `DEVICE_TOKEN_STATUS_PENDING` | Not approved yet | Tell the user it isn't registered yet; ask them to finish Approve and **tell you again** — do **not** enter a sleep/poll loop |
-| `DEVICE_TOKEN_STATUS_SLOW_DOWN` | Called too fast | Wait for the next user message, then retry once |
+| `DEVICE_TOKEN_STATUS_SLOW_DOWN` | Called again within `interval` seconds | **Not a failure, and not the real status** — see below |
 | `DEVICE_TOKEN_STATUS_DENIED` | User denied | Stop; tell the user access was denied |
 | `DEVICE_TOKEN_STATUS_EXPIRED` | Handshake timed out | Stop; restart at Step 1 |
 | `DEVICE_TOKEN_STATUS_APPROVED` | Done | Capture the tokens (below) |
 
-On `APPROVED` (fields may be camelCase: `accessToken`, `refreshToken`, `organizationId`, `expiresIn`):
+**`SLOW_DOWN` masks the real status.** The server rate-limits per device code at one
+call per `interval` (~5s): a second call inside that window returns `SLOW_DOWN`
+*instead of* the true state, and each early call keeps the limiter engaged. So an
+approved login can still read `SLOW_DOWN`. Never treat it as "not approved" — it means
+"you asked too soon". Let at least `interval` seconds of real time pass (i.e. wait for
+the user's next message; do **not** sleep-loop), then call once more.
+
+A code that has aged out is still a **200** carrying `DEVICE_TOKEN_STATUS_EXPIRED` —
+the server keeps it and reports it properly, so you get a clear "restart at Step 1"
+signal rather than an error.
+
+Errors are a separate channel: HTTP 4xx with a Connect error body, no `status` field.
+A device code the server never issued returns **HTTP 400**:
+
+```json
+{"code":"invalid_argument","message":"unknown device code","details":[…]}
+```
+
+In practice that means a corrupted or hallucinated `device_code`, not an expired one.
+Check the HTTP code first and only read `.status` on a 200.
+
+On `APPROVED` — same camelCase wire format as Step 1 (`expiresIn` is a string):
 
 ```json
 {
   "status": "DEVICE_TOKEN_STATUS_APPROVED",
-  "access_token": "eyJ…",
-  "refresh_token": "agentrt_…",
-  "expires_in": 900,
-  "organization_id": "0cyje0…"
+  "accessToken": "eyJ…",
+  "refreshToken": "agentrt_…",
+  "expiresIn": "900",
+  "organizationId": "0cyje0…"
 }
 ```
 
-**Capture `organization_id` / `organizationId`** — it is the org the user approved, and the **only**
-place you learn it. Send this exact value as `organization_id` on every Portal API
-call (Step 4). Don't guess it.
+**Capture `organizationId`** — it is the org the user approved, and the **only**
+place you learn it. Send that value back as `organization_id` (snake_case, in the
+**request** body) on every Portal API call (Step 4). Don't guess it.
 
 The `device_code` is **single-use** — once approved and the tokens are returned,
 calling again fails. Stop.
@@ -200,9 +224,9 @@ Response — a **new** access token **and a new refresh token**:
 
 ```json
 {
-  "access_token": "eyJ…",
-  "refresh_token": "agentrt_…NEW",
-  "expires_in": 900
+  "accessToken": "eyJ…",
+  "refreshToken": "agentrt_…NEW",
+  "expiresIn": "900"
 }
 ```
 
@@ -218,8 +242,16 @@ Response — a **new** access token **and a new refresh token**:
 - A refresh re-checks the user's live role/membership. If they were removed from
   the org or lost access, refresh fails — restart the login.
 
-If `RefreshToken` returns an error (revoked, expired, or unknown), discard both
-tokens and begin a fresh device-code login (Step 1).
+A refresh token that is expired, revoked, already-rotated, or unknown fails the same
+way — **HTTP 401**, with no distinguishing detail:
+
+```json
+{"code":"unauthenticated","message":"unauthenticated"}
+```
+
+You cannot tell those cases apart from the response, so treat any `RefreshToken`
+failure identically: discard both tokens and begin a fresh device-code login (Step 1).
+Do not retry the refresh — the same token will keep failing.
 
 ## Token Lifetimes (defaults; deployment may tune)
 

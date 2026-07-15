@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+<<<<<<< HEAD
 - `substreams-hosted-sink` (v1.12.1): typo “Nerver” → “Never ask for a DSN”; add ClickHouse `Deploy` example; clarify `GoogleCloudSqlPrivate` is out of the standard agent path; curl examples use `$DEPLOYMENT_ID` from `CreateDeployment` (not invented slugs).
 - README: hosted-sink blurb no longer says `DeployDatabase` provisions a DB or that agents pick `api_key_id` (attach user DB; key is auto-created).
 - `portal-api` (v1.16.2): confirmation protocol no longer groups `DeployDatabase` with “provisions billable infrastructure” — attach/validate only; billable runner is `Deploy`.
@@ -13,6 +14,9 @@ All notable changes to this project will be documented in this file.
 - `substreams-dev` / legacy Solana notes / `substreams-convert`: align Solana Cargo pins with the matched-pair matrix (was incorrectly `0.6`+`0.15` or still on `0.14.3`).
 - `substreams-sink` (v1.3.1): correct Go quickstart to monorepo API (`github.com/streamingfast/substreams/sink`, `NewFromViper` + `NewSinkerHandlers`); fix JS quickstart to official `streamBlocks` + `createGrpcTransport`; note entity-change v2 still pins `substreams ^0.6`; add skill routing vs sql/deploy-local/hosted-sink; align JS reference with gRPC transport.
 - `substreams-sql` (v1.3.1): composite primary keys must use column/value tuples matching `schema.sql` (not string-concat keys); CDC manifest example uses a `v`-prefixed `package.version`; remove anti-pattern of module-level last-block skip (sink owns cursors); correct Postgres MV refresh guidance; note `--batch-block-flush-interval` for short smoke runs; align T2.3 database-changes import to v4.0.0 spkg with crate v4; README SQL blurb uses From-proto terminology and ClickHouse mode lock.
+=======
+- `substreams-sink-deploy-local` (v2.1.0): correct live CLI facts — remove non-existent `generate`/`undo` and invented `--workers`; document `run <dsn> <manifest> [range]` (module from `sink:`), `tools cursor delete`, hand-written `schema.sql`, from-proto ops path, webhook/protojson signatures (`state.cursor`), and metrics default `localhost:9102`.
+>>>>>>> wrangler/substreams-sink-deploy-local-skill-need-to-be-reviewed-and-tested
 - `substreams-dev` (v1.3.1): short registry form `name@version` and `@latest` do not resolve via the CLI (rewrites to `substreams.dev/v1/packages/...` HTML 404) — prefer `https://spkg.io/v1/packages/<slug>/<version>` for `imports:`, `substreams run`/`info`, and head-block lookup; document relative `-t` + `-s -1` limitation.
 - `substreams-dev`: package metadata example used unprefixed `version: 1.3.0` (must be `v`-prefixed); update Solana crate guidance to `0.15`+`substreams 0.7`; clarify `substreams-entity-change` v2 still pins `substreams ^0.6` so graph_out should keep inlining EntityChanges.
 - `substreams-ethereum` (v1.0.1): clarify that `Hex::encode` is unprefixed — emit addresses/tx as `0x` + lowercase hex; keep store keys consistent with lookups.

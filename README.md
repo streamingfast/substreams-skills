@@ -36,12 +36,12 @@ Develop Substreams for **Solana programs**:
 - Instruction data + account layout parsing with or without IDL
 
 ### ✅ Substreams SQL (`substreams-sql`)
-Expert knowledge for building SQL database sinks from Substreams data. Covers both approaches:
-- **Database Changes (CDC)** - Stream individual row changes for real-time consistency
-- **Relational Mappings** - Transform data into normalized tables with proper relationships
-- **PostgreSQL** - Advanced patterns, indexing strategies, and performance optimization
-- **ClickHouse** - Analytics-optimized schemas, materialized views, and time-series patterns
-- **Schema Design** - Best practices for blockchain data modeling
+Expert knowledge for building SQL database sinks from Substreams data. Covers both mapping modes:
+- **Database Changes (CDC)** — row-level INSERT/UPDATE/UPSERT/DELETE (**PostgreSQL only**)
+- **From proto definition** — proto annotations → tables (**PostgreSQL and ClickHouse**; required for ClickHouse)
+- **PostgreSQL** — schemas, indexes, delta aggregations, operational patterns
+- **ClickHouse** — from-proto only; ORDER BY / PK rules, reserved names, analytics MVs
+- **Schema Design** — best practices for blockchain data modeling
 
 ### ✅ Substreams Sink (`substreams-sink`)
 Expert knowledge for consuming Substreams data in custom applications. Use when integrating Substreams outputs directly into Go, JavaScript, Python, or Rust code:

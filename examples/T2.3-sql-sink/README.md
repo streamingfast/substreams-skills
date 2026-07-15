@@ -24,9 +24,9 @@ Take the T1.2 USDC transfers module and add a `db_out` map that emits `sf.substr
 ## What the skill provided
 
 - `substreams-database-change` crate FQN path (`substreams_database_change::pb::sf::substreams::sink::database::v1::DatabaseChanges`)
-- `DatabaseChanges` builder pattern (`tables::CreateRow`, `change`, etc.)
-- Composite-PK array syntax for `change()` calls
-- `substreams.yaml` `db_out` module wiring (input = upstream map, output type = `DatabaseChanges`)
+- `DatabaseChanges` builder pattern (`tables::Tables` + `create_row` / `set`)
+- Composite-PK array syntax matching `schema.sql` `PRIMARY KEY (tx_hash, log_index)`
+- `substreams.yaml` `db_out` wiring + **v4.0.0** database-changes spkg (matches crate `= "4"`)
 
 ## Files
 

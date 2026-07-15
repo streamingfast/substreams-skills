@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.3.0
+  version: 1.3.1
   author: StreamingFast
   documentation: https://substreams.streamingfast.io
 ---
@@ -149,9 +149,18 @@ pub fn db_out(events: Events) -> Result<DatabaseChanges, Error> {
     let mut tables = Tables::new();
 
     for transfer in events.transfers {
+        // Composite PK must match schema.sql column names and PRIMARY KEY order.
+        // Prefer an array of (column, value) tuples — do NOT string-concat into one key
+        // when the table has multi-column PRIMARY KEY (common agent footgun).
+        let log_index = transfer.log_index.to_string();
         tables
-            .create_row("transfers", format!("{}-{}", transfer.tx_hash, transfer.log_index))
-            .set("tx_hash", transfer.tx_hash)
+            .create_row(
+                "transfers",
+                [
+                    ("tx_hash", transfer.tx_hash.as_str()),
+                    ("log_index", log_index.as_str()),
+                ],
+            )
             .set("from_addr", transfer.from)
             .set("to_addr", transfer.to)
             .set("amount", transfer.amount)
@@ -160,6 +169,7 @@ pub fn db_out(events: Events) -> Result<DatabaseChanges, Error> {
     }
 
     for balance in events.balance_changes {
+        // Single-column PK: a plain string is fine
         tables
             .update_row("balances", balance.address)
             .set("balance", balance.new_balance)
@@ -170,6 +180,14 @@ pub fn db_out(events: Events) -> Result<DatabaseChanges, Error> {
 }
 ```
 
+**Hard rule — primary keys must match `schema.sql`:**
+
+| Schema | `create_row` / `update_row` / `upsert_row` |
+|---|---|
+| `PRIMARY KEY (tx_hash, log_index)` | `[("tx_hash", …), ("log_index", …)]` with the **same names and order** |
+| `PRIMARY KEY (address)` | single string key is OK |
+| String-concat key `"tx-log"` | only if schema has a **single** PK column holding that string — never invent this when the table uses multi-column PKs |
+
 ### Manifest Configuration
 
 The manifest requires importing the database changes and sink-sql protodefs spkgs, and a `sink:` section:
@@ -178,7 +196,7 @@ The manifest requires importing the database changes and sink-sql protodefs spkg
 specVersion: v0.1.0
 package:
   name: my-substreams-sql
-  version: 1.3.0
+  version: v0.1.0   # must be v-prefixed (unprefixed versions warn at build)
   url: https://github.com/myorg/my-substreams-sql   # set it — avoids package.url warning
   description: SQL sink substreams for <protocol>     # set it — avoids package.description warning
 
@@ -234,6 +252,10 @@ substreams-sink-sql setup "psql://user:pass@localhost:5432/db?sslmode=disable" m
 
 # 3. Run the sink
 substreams-sink-sql run "psql://user:pass@localhost:5432/db?sslmode=disable" my-substreams-sql-v0.1.0.spkg
+
+# Short test ranges (e.g. -t +100): rows may not flush with the default batch size.
+# Use --batch-block-flush-interval=1 for smoke tests. Full ops flags: substreams-sink-deploy-local.
+# substreams-sink-sql run "$DSN" ./pkg.spkg 18000000:+100 --batch-block-flush-interval=1
 ```
 
 ### Advantages
@@ -441,6 +463,8 @@ specVersion: v0.1.0
 package:
   name: my-substreams-sql
   version: v0.1.0
+  url: https://github.com/myorg/my-substreams-sql
+  description: SQL from-proto substreams for <protocol>
 
 network: solana   # or mainnet / ethereum-mainnet, etc.
 
@@ -568,7 +592,9 @@ FROM erc20_transfers t
 JOIN transactions tx ON t.tx_hash = tx.hash
 GROUP BY DATE(to_timestamp(timestamp)), contract_address;
 
--- Refresh strategy (handled by Substreams)
+-- Concurrent refresh requires a unique index. Substreams does NOT auto-refresh
+-- Postgres MVs — schedule REFRESH MATERIALIZED VIEW CONCURRENTLY yourself
+-- (cron, pg_cron, app job) or use plain views / delta-update tables instead.
 CREATE UNIQUE INDEX ON daily_transfer_volumes (date, contract_address);
 ```
 
@@ -818,31 +844,16 @@ FROM (
 
 ### Update Strategies
 
-**Incremental Updates**:
-```rust
-// Track last processed block for incremental updates
-#[substreams::handlers::store]
-pub fn store_last_block(block: Block, store: StoreSetInt64) {
-    store.set(0, "last_processed_block", &(block.number as i64));
-}
+**Do not** implement “skip already-processed blocks” with a store of last block number inside the module. Substreams is deterministic and reorg-aware: the **sink** advances a cursor and may undo/replay ranges. A module that filters by a stored high-water mark breaks reorgs and historical re-runs.
 
-// Only process new data
-#[substreams::handlers::map]
-pub fn incremental_db_out(
-    block: Block,
-    last_block_store: StoreGetInt64
-) -> Result<DatabaseChanges, Error> {
-    let last_processed = last_block_store.get_last("last_processed_block")
-        .unwrap_or(0);
+**What to do instead:**
 
-    if block.number <= last_processed as u64 {
-        return Ok(DatabaseChanges::default()); // Skip already processed
-    }
-
-    // Process only new block data
-    process_block_data(block)
-}
-```
+| Goal | Approach |
+|---|---|
+| Resume after restart | Sink cursor (automatic) — do not hand-roll |
+| Aggregations / candles | Postgres **delta updates** (`add` / `max` / …) on Database Changes |
+| Pre-aggregated analytics | ClickHouse / Postgres **materialized views** (engine-specific; not “auto by Substreams”) |
+| Mutable balances | Database Changes `update_row` / `upsert_row` (Postgres only) |
 
 **Cursor-based Consistency**:
 

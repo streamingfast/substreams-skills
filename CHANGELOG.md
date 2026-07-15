@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `substreams-hosted-sink` (v1.12.1): typo “Nerver” → “Never ask for a DSN”; add ClickHouse `Deploy` example; clarify `GoogleCloudSqlPrivate` is out of the standard agent path; curl examples use `$DEPLOYMENT_ID` from `CreateDeployment` (not invented slugs).
+- README: hosted-sink blurb no longer says `DeployDatabase` provisions a DB or that agents pick `api_key_id` (attach user DB; key is auto-created).
+- `portal-api` (v1.16.2): confirmation protocol no longer groups `DeployDatabase` with “provisions billable infrastructure” — attach/validate only; billable runner is `Deploy`.
 - `portal-api` (v1.16.1): upgrade/downgrade rubric compared `total_cents` to `base_price × 100` even though both fields are already integer cents — compare cents directly.
 - `portal-api`: clarify `DeployDatabase` attaches an existing Postgres connection only (does not provision a DB; no `clickhouse_spec` — use Deploy `outputConfig.clickhouse`); note serverless DB cold-start retries on Deploy.
 - `portal-api`: document production JSON quirks verified live — proto3 omits zeros (e.g. missing `plan_tier` ≈ Community), `int64`/`uint64` may be strings, empty billing/state objects are valid; deployment IDs are server UUIDs (not only a `dep` prefix).

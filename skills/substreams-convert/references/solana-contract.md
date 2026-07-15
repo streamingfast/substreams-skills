@@ -58,8 +58,8 @@ Follow the step-by-step guide below.
 ```toml
 # Cargo.toml — key dependencies for Solana Substreams
 [dependencies]
-substreams        = "0.6"          # Stay on 0.6.x — substreams-solana 0.14.x requires it
-substreams-solana = "0.14.3"       # Block model + walk_instructions helper
+substreams        = "0.7"          # Matched pair with substreams-solana 0.15
+substreams-solana = "0.15"         # Block model + walk_instructions helper
 bs58              = "0.4"          # base58 encode/decode for pubkeys
 prost             = "0.13"
 prost-types       = "0.13"
@@ -73,9 +73,9 @@ opt-level = "s"
 strip     = "debuginfo"
 ```
 
-> **Version compatibility**: `substreams-solana 0.14.x` requires `substreams = "0.6"`. Check [crates.io/crates/substreams-solana](https://crates.io/crates/substreams-solana) for a newer release that may support `substreams = "0.7"` before assuming these exact versions. The compatibility matrix changes over time.
+> **Version compatibility**: use a **matched pair** only — `substreams = "0.7"` + `substreams-solana = "0.15"` (default), or legacy `substreams = "0.6"` + `substreams-solana = "0.14.x"`. Check [crates.io/crates/substreams-solana](https://crates.io/crates/substreams-solana) before assuming these pins forever.
 >
-> **WARNING — do NOT mix `substreams = "0.7"` with `substreams-solana = "0.14"`**. This causes linker errors ("symbol multiply defined") at build time. The `substreams-dev` skill's Cargo.toml template recommends `0.7` for Ethereum — that does NOT apply to Solana. Always check the `substreams-solana` crate page for the currently required `substreams` version before starting.
+> **WARNING — do NOT mix majors** (`0.7` with `0.14`, or `0.6` with `0.15`). That causes dual dependency trees / linker errors ("symbol multiply defined") at build time.
 
 ## Step-by-Step Conversion
 
@@ -424,7 +424,7 @@ substreams run ./substreams.yaml map_swaps \
 | Forgetting failed transactions | `block.transactions()` filters to **successful** txns only; use `&block.transactions` for all |
 | Wrong discriminator bytes | Pre-compute with SHA256 and hardcode; verify against known transactions |
 | Missing account index bounds check | Check `accounts.len() >= N` before indexing |
-| `substreams = "0.7"` with `substreams-solana = "0.14"` | Use `substreams = "0.6"` for Solana |
+| Mismatched `substreams` / `substreams-solana` majors | Use `0.7`+`0.15` or `0.6`+`0.14.x` only |
 | `initialBlock: 0` | Use program deployment slot — full Solana history is massive |
 | Parsing Anchor events from `message.instructions` | Events are emitted in log messages, not instruction data |
 

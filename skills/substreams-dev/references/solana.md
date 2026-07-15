@@ -10,8 +10,9 @@ For pure network-ID lookups (mainnet/devnet/accounts) see `networks.md`.
 
 ```toml
 [dependencies]
-substreams = "0.6"             # Stay on 0.6.x — substreams-solana 0.14.x is not yet compatible with substreams 0.7; 0.5 is excluded because it pins prost 0.11
-substreams-solana = "0.14.3"   # Block model + helpers
+# Matched pairs only: 0.7+0.15 (default) or 0.6+0.14.x (legacy). Never mix.
+substreams = "0.7"
+substreams-solana = "0.15"     # Block model + helpers (0.15 requires substreams 0.7)
 bs58 = "0.4"                   # pubkey/signature encode/decode
 prost = "0.13"
 prost-types = "0.13"

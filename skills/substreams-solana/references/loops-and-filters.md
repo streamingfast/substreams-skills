@@ -118,16 +118,21 @@ When scanning large slot ranges, emit an **index** so the runtime can skip empty
 ```rust
 use substreams::pb::sf::substreams::index::v1::Keys;
 
+// Handler is still #[map]; manifest kind is blockIndex.
 #[substreams::handlers::map]
 fn index_program_activity(events: MyEvents) -> Result<Keys, Error> {
     let mut keys = Keys::default();
-    if events.items.is_empty() {
+    if events.swaps.is_empty() && events.deposits.is_empty() {
         return Ok(keys);
     }
     keys.keys.push("program:YourProgramId…".to_string());
-    for item in &events.items {
-        keys.keys.push(format!("account:{}", item.pool));
-        keys.keys.push(format!("ix:{}", item.instruction_name));
+    for swap in &events.swaps {
+        keys.keys.push(format!("account:{}", swap.pool));
+        keys.keys.push("ix:swap".to_string());
+    }
+    for dep in &events.deposits {
+        keys.keys.push(format!("account:{}", dep.user_wallet));
+        keys.keys.push("ix:deposit".to_string());
     }
     Ok(keys)
 }
@@ -145,11 +150,21 @@ modules:
       type: proto:my.v1.Events
 
   - name: index_events
-    kind: index
+    kind: blockIndex          # not "index" — see substreams-dev block-filtering
     inputs:
       - map: map_events
     output:
       type: proto:sf.substreams.index.v1.Keys
+
+  # A consumer must declare blockFilter to actually skip empty blocks:
+  # - name: filtered_events
+  #   kind: map
+  #   blockFilter:
+  #     module: index_events
+  #     query:
+  #       string: "program:YourProgramId…"
+  #   inputs:
+  #     - map: map_events
 ```
 
 **Key naming conventions (suggested):**

@@ -576,7 +576,7 @@ Always set `crate-type = ["cdylib"]`, release LTO, and matching `prost` / `prost
 | Chain | Skill for full Cargo.toml | Core crates (typical; check crates.io) |
 |---|---|---|
 | **EVM** | `substreams-ethereum` | `substreams = "0.7"`, `substreams-ethereum = "0.11"`, `ethabi`, `hex` |
-| **Solana** | `substreams-solana` | `substreams = "0.6"`, `substreams-solana = "0.15"` (0.14.x also fine), `bs58`, `sha2` |
+| **Solana** | `substreams-solana` | **`substreams = "0.7"` + `substreams-solana = "0.15"`** (legacy: `0.6` + `0.14.x` only — never mix majors), `bs58`, `sha2` |
 | **SQL DatabaseChanges** | `substreams-sql` | `substreams-database-change = "4"` (with substreams 0.7) |
 
 **Shared pitfalls:**

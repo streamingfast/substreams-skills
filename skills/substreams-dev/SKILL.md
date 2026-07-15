@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, opencode, vscode, windsurf]
 metadata:
-  version: 1.3.0
+  version: 1.3.1
   author: StreamingFast
   documentation: https://substreams.streamingfast.io
 ---
@@ -213,13 +213,14 @@ curl "https://substreams.dev/v1/registry/packages?query=uniswap&network=mainnet&
 `hasMore` is `true` when more pages follow — increment `page` to fetch them.
 
 **`spkg` vs `reference` — pick the right one:** every result carries two forms of the same latest release.
-- **`spkg`** — full package URL. **Use this when EXECUTING a command programmatically:** `substreams run <spkg> <module>`, `substreams gui <spkg>`, or as a `substreams.yaml` dependency.
-- **`reference`** — short `<slug>@<version>` notation. **Use this when DISPLAYING a command to a human** — more readable, resolves to the same package.
+- **`spkg`** — full package URL (`https://spkg.io/v1/packages/<slug>/<version>`). **Always use this for execution and for `imports:` in manifests:** `substreams run <spkg> <module>`, `substreams gui <spkg>`, `substreams info <spkg>`, and `imports: { eth_common: <spkg> }`.
+- **`reference`** — short `<slug>@<version>` notation. Fine for **display** (docs, chat). **Do not put short form in runnable commands or `imports:`** — today's CLI rewrites `name@version` to `https://substreams.dev/v1/packages/<name>/<version>`, which returns HTML 404. Working download hosts are **`spkg.io`** and **`api.substreams.dev`** only. There is no working `@latest` tag; pin the version from `latestVersion` / `spkg`.
 
 Both are empty when no release version is known.
 
 **Other notes:**
 - The API is rate-limited (per-IP, ~60 req/min, burst 10). Over-limit requests return `429` with a `Retry-After` header — back off and retry.
+- Query param names: `page_size` and `pageSize` both work; OpenAPI documents `pageSize`.
 - The full contract is published as an OpenAPI 3 document at `GET https://substreams.dev/v1/registry/openapi.yaml` (source of truth for fields and usage).
 
 ### Creating a New Project
@@ -448,11 +449,17 @@ fn index_events(events: Events) -> Result<Keys, Error> {
   **lowercase** hex (EVM checksum/mixed-case addresses never match).
 - **Don't reinvent.** Most chains ship a foundational package whose `filtered_*`
   modules already apply the `blockFilter` *and* return only matching records, so
-  depend on those directly (e.g. `imports: { eth_common: ethereum_common@v0.3.3 }`
-  → `map: eth_common:filtered_events`). You **must override the default params**
-  query (`eth_common:filtered_events: "…"`), or you silently emit the default's
-  data. In-handler filtering is only needed when you roll your own `blockFilter`,
-  or for Solana instruction-level filtering (transactions are pre-filtered, but
+  depend on those directly via **spkg URL** (short `name@version` imports 404 —
+  see Registry Search notes above):
+  ```yaml
+  imports:
+    eth_common: https://spkg.io/v1/packages/ethereum-common/v0.3.3
+  # then: map: eth_common:filtered_events
+  ```
+  You **must override the default params** query
+  (`eth_common:filtered_events: "…"`), or you silently emit the default's data.
+  In-handler filtering is only needed when you roll your own `blockFilter`, or
+  for Solana instruction-level filtering (transactions are pre-filtered, but
   instructions within them are not).
 
 **Full guide (SQE syntax, `params` vs `string`, `use` inheritance, foundational
@@ -498,7 +505,7 @@ See [references/manifest-spec.md](./references/manifest-spec.md) for complete sp
 specVersion: v0.1.0
 package:
   name: my-substreams
-  version: 1.3.0
+  version: v0.1.0
   url: https://github.com/myorg/my-substreams   # set it — silences "URL (package.url) is not set"
   description: Description of what this substreams does   # set it — silences the description warning
 ```
@@ -566,10 +573,10 @@ Supported networks: See [references/networks.md](./references/networks.md)
 
 Always set `crate-type = ["cdylib"]`, release LTO, and matching `prost` / `prost-types` majors.
 
-| Chain | Skill for full Cargo.toml | Core crates (typical) |
+| Chain | Skill for full Cargo.toml | Core crates (typical; check crates.io) |
 |---|---|---|
 | **EVM** | `substreams-ethereum` | `substreams = "0.7"`, `substreams-ethereum = "0.11"`, `ethabi`, `hex` |
-| **Solana** | `substreams-solana` | `substreams = "0.6"`, `substreams-solana = "0.14.x"`, `bs58`, `sha2` |
+| **Solana** | `substreams-solana` | `substreams = "0.6"`, `substreams-solana = "0.15"` (0.14.x also fine), `bs58`, `sha2` |
 | **SQL DatabaseChanges** | `substreams-sql` | `substreams-database-change = "4"` (with substreams 0.7) |
 
 **Shared pitfalls:**
@@ -802,17 +809,21 @@ See [references/patterns.md](./references/patterns.md) for cross-cutting example
 
 ## Querying Chain Head Block
 
-To get the current head block of a chain (useful for determining the latest block number):
+To get the current head block of a chain (useful for determining the latest block number). Requires data-plane auth (`substreams auth` / `SUBSTREAMS_API_TOKEN`).
 
-**Using Substreams:**
+**Using Substreams** (foundational `common` package — use the **spkg URL**, not `common@latest`; short form and `@latest` do not resolve):
 ```bash
-# Quick head block lookup for a network
-substreams run common@latest -s -1 --network mainnet
+# map_clocks emits sf.substreams.v1.Clock for every block; -s -1 starts at chain head.
+# Do NOT combine -s -1 with a relative -t +N (CLI requires an absolute start for +stop).
+# Ctrl-C after the first line, or pipe through head.
+substreams run https://spkg.io/v1/packages/common/v0.1.0 map_clocks \
+  -s -1 --network mainnet -o jsonl
 
-# Or with explicit endpoint
-substreams run common@latest -e=<network-id-alias-or-host> -s -1 -o jsonl
+# Or with an explicit endpoint (same package URL)
+substreams run https://spkg.io/v1/packages/common/v0.1.0 map_clocks \
+  -e mainnet.eth.streamingfast.io:443 -s -1 -o jsonl
 ```
-Read the first line of output to get the head block information. The `-s -1` flag starts from the latest block.
+Read the first line of output for the head clock (`number` / hash). Default endpoint for a network: `substreams tools default-endpoint <network>`.
 
 **Using firecore:**
 ```bash
@@ -878,9 +889,13 @@ If you see errors like "no method named `decode` found":
 
 **spkg import 404 errors**:
 
+* Prefer **full URLs**: `https://spkg.io/v1/packages/<slug>/<version>` or
+  `https://api.substreams.dev/v1/packages/<slug>/<version>` (binary `.spkg`).
+  Short `name@version` rewrites to `https://substreams.dev/v1/packages/...` and
+  currently 404s (HTML site, not the package API).
 * Use `substreams-ethereum` spkg, NOT `sf-ethereum` (doesn't exist)
-* Verify the release version exists on GitHub
-* Check for typos in the URL
+* Verify the release version exists (registry search `latestVersion` / GitHub releases)
+* Check for typos in the slug (registry `slug` often uses hyphens: `ethereum-common`)
 
 **Empty output**:
 
@@ -908,7 +923,7 @@ Key facts to avoid the most common mistake:
 
 ### Quick pattern (full example in substreams-sink skill)
 
-Do NOT add `substreams-entity-change = "1"` to Cargo.toml — v1 has a `prost` version conflict with the current toolchain (prost 0.13). Check [crates.io](https://crates.io/crates/substreams-entity-change) to see if a newer version resolves this before inlining the proto. Instead, inline the proto:
+Do **not** rely on the `substreams-entity-change` crate for modern `substreams 0.7` pipelines. **v1** conflicts with prost 0.13; **v2.0.0** has `prost ^0.13` but still depends on **`substreams ^0.6`**, so it does not drop cleanly into a 0.7 tree. Prefer inlining the proto (below). Re-check [crates.io](https://crates.io/crates/substreams-entity-change) before changing this advice.
 
 **`proto/entity.proto`** (exact package name required):
 ```proto

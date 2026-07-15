@@ -253,11 +253,12 @@ across runs, so for widely-used foundational modules the index has typically
 already been computed by an earlier run and your stream reuses it.
 
 **Prefer depending directly on a foundational `filtered_*` module.** Import with
-short registry notation:
+a **full spkg URL** (short `name@version` currently 404s via the CLI — use
+`spkg.io` / `api.substreams.dev`):
 
 ```yaml
 imports:
-  eth_common: ethereum_common@v0.3.3
+  eth_common: https://spkg.io/v1/packages/ethereum-common/v0.3.3
 
 modules:
   - name: map_my_data
@@ -272,7 +273,7 @@ params:
   eth_common:filtered_events: "evt_addr:0xdac17f958d2ee523a2206206994597c13d831ec7"
 ```
 
-`ethereum_common@v0.3.3` provides (key namespaces in parentheses):
+`ethereum_common` v0.3.3 provides (key namespaces in parentheses):
 
 | Module | Kind | Emits / filters on |
 |---|---|---|
@@ -282,7 +283,7 @@ params:
 | `index_events_and_calls` | blockIndex | all of the above |
 | `filtered_events` / `filtered_calls` / `filtered_transactions` / `filtered_events_and_calls` | map | the matching events / calls / transactions |
 
-Solana's `solana_common@v0.4.0` provides `blocks_without_votes`, the
+Solana's `solana_common` v0.4.0 provides `blocks_without_votes`, the
 `program_ids_without_votes` index (`program:<id>` keys), and the pre-filtered
 `transactions_by_programid_without_votes` (and `..._and_account_...`) maps.
 
@@ -342,7 +343,7 @@ transaction-filtered for you, via its `program:<id>` params query:
 
 ```yaml
 imports:
-  solana_common: solana_common@v0.4.0
+  solana_common: https://spkg.io/v1/packages/solana-common/v0.4.0
 
 modules:
   - name: map_my_program

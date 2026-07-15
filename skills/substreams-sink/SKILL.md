@@ -65,6 +65,8 @@ export SUBSTREAMS_API_TOKEN=<your-jwt-token>
 
 The `substreams auth` command handles token exchange and local storage automatically.
 
+> **Note — this is data-plane auth, not Portal auth.** `SUBSTREAMS_API_KEY` / `SUBSTREAMS_API_TOKEN` authenticate the sink against the **streaming data endpoints**. They are separate from the StreamingFast **Portal** admin API (billing, usage, hosted deployments), which the `portal-api` and `portal-api-jwt` skills cover. A Portal device-code/Bearer token from `portal-api-jwt` is scoped to Portal routes only and will **not** authenticate a sink — use the `substreams auth` flow here.
+
 ## Sink Output Types — Pick the Right Proto FIRST
 
 Before writing a `graph_out` or `db_out` module, choose the correct output proto. These are different sink contracts; mixing them up produces a buildable-but-wrong pipeline.

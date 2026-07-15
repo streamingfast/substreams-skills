@@ -2,6 +2,41 @@
 
 Advanced patterns for high-performance analytics with ClickHouse and Substreams.
 
+> **Mode lock:** ClickHouse uses **From proto definition only** (`substreams-sink-sql from-proto`). Do not use `DatabaseChanges` / `db_out` / `setup`+`run` CDC against ClickHouse in this skill path.
+
+## Primary key must prefix ORDER BY (from-proto / hosted)
+
+`substreams-sink-sql` builds ClickHouse tables as `ReplacingMergeTree(_version_, _deleted_)` with:
+
+| DDL clause | Source in protobuf |
+|---|---|
+| `PRIMARY KEY (…)` | Fields with `[(schema.field) = { primary_key: true }]` |
+| `ORDER BY (…)` | `schema.table.clickhouse_table_options.order_by_fields` |
+| `PARTITION BY (…)` | `partition_fields` (prefer `toYYYYMM(_block_timestamp_)`) |
+
+**ClickHouse rule:** the primary key **must be a prefix of the sorting key**.
+
+```text
+# Typical failure from a Raydium/Solana event proto:
+PRIMARY KEY (id)  ORDER BY (slot, id)
+→ DB::Exception: Primary key must be a prefix of the sorting key,
+  but the column in the position 0 is slot, not id
+```
+
+| Bad | Good |
+|---|---|
+| PK `id`, ORDER BY `slot, id` | PK `id`, ORDER BY `id` or `id, slot` |
+| PK `id`, ORDER BY `slot, signature, id` | PK `slot, id`, ORDER BY `slot, id` |
+
+**Safe defaults for event rows:**
+
+1. **Identity-first:** one unique `id` (e.g. `signature` + ordinal) as sole PK; `order_by_fields = [id]` or `[id, slot]`.
+2. **Time-first:** put the leading query column in **both** PK and ORDER BY: e.g. PK `(slot, id)` and `order_by_fields = [slot, id]`.
+
+**Partitioning:** use coarse keys only. Prefer `partition_fields: [{ name: "_block_timestamp_", function: toYYYYMM }]`. Do **not** partition by raw `slot` (huge partition counts).
+
+Before deploying a hosted ClickHouse sink, verify: *ordered PK field names === leading segment of `order_by_fields`*.
+
 ## ClickHouse-Optimized Schema Design
 
 ### MergeTree Engine Configuration
@@ -404,20 +439,17 @@ ENGINE = Distributed('clickhouse_cluster', 'default', 'erc20_transfers_replicate
 ### Optimized Ingestion Patterns
 
 ```yaml
-# Manifest sink configuration for ClickHouse
-# Note: DSN is passed on the CLI, not in the manifest
+# Manifest sink configuration for ClickHouse — From proto definition only
+# Output module must be your annotated proto, NOT DatabaseChanges
 sink:
-  module: db_out
+  module: map_transfer
   type: sf.substreams.sink.sql.v1.Service
-  config:
-    schema: ./clickhouse-schema.sql
-    engine: clickhouse
+  config: {}
 ```
 
 ```bash
-# Run the sink with ClickHouse DSN
-substreams-sink-sql setup "clickhouse://default:@clickhouse-cluster:9000/blockchain" my-substreams.spkg
-substreams-sink-sql run "clickhouse://default:@clickhouse-cluster:9000/blockchain" my-substreams.spkg
+# Run with from-proto (ClickHouse does not use Database Changes setup+run)
+substreams-sink-sql from-proto "clickhouse://default:@clickhouse-cluster:9000/blockchain" ./substreams.yaml
 ```
 
 ### Bulk Data Operations

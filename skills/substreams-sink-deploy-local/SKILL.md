@@ -1,30 +1,30 @@
 ---
-name: substreams-sink-deploy
-description: Use when the user wants to run, deploy, or operate a Substreams sink — take a built .spkg and pipe its data into a destination (Postgres, ClickHouse, files, PubSub, webhook). Covers sink CLIs, schema setup, cursor management, reorg handling, and production operations. Distinct from substreams-sql (building the db_out Rust module) and substreams-sink (SDK-level app integration).
+name: substreams-sink-deploy-local
+description: Use when the user wants to run or operate a Substreams sink themselves — take a built .spkg and pipe its data into a destination (Postgres, ClickHouse, files, PubSub, webhook) on infrastructure they manage. Covers sink CLIs, schema setup, cursor management, reorg handling, and production operations. For StreamingFast-hosted sinks (managed via the Portal API) use substreams-hosted-sink instead. Distinct from substreams-sql (building the db_out Rust module) and substreams-sink (SDK-level app integration).
 license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.3.0
+  version: 2.0.0
   author: StreamingFast
   documentation: https://docs.substreams.dev/how-to-guides/sinks
 ---
 
-# Substreams Sink Deployment Expert
+# Substreams Sink Deployment Expert (Self-Managed)
 
-End-to-end guide for taking a working Substreams package and getting its data into a destination — local, hosted, or managed.
+End-to-end guide for taking a working Substreams package and running its sink yourself — on your own machine, server, or container. For a StreamingFast-**hosted** sink (no infrastructure to manage, driven entirely through the Portal API), use the `substreams-hosted-sink` skill instead.
 
 ## When to Use This Skill
 
 Use this skill when the user says any of:
-- "deploy my substreams"
+- "deploy my substreams" (and runs it themselves)
 - "I want to send data to Postgres / ClickHouse"
 - "stream my Substreams to S3 / GCS / files"
 - "publish to PubSub / a webhook"
-- "deploy to a hosted sink"
 - "set up substreams-sink-sql / -files / -pubsub"
 
 **Do NOT use this skill** when the user is:
+- Wanting StreamingFast to host & run the sink for them → use `substreams-hosted-sink`
 - Writing the Substreams Rust code → use `substreams-dev`
 - Picking field names for `db_out` / `DatabaseChanges` → use `substreams-sql`
 - Consuming Substreams in a Go/JS/Rust app → use `substreams-sink`
@@ -153,7 +153,7 @@ substreams-sink-sql run "$DSN" \
 # substreams-sink-sql run "$DSN" ./my-substreams.spkg "12000000:+1000000"
 ```
 
-Auth required: set `SUBSTREAMS_API_KEY` (new accounts) or `SUBSTREAMS_API_TOKEN` (JWT/legacy accounts). See pitfall #5 for details.
+Auth required: set `SUBSTREAMS_API_KEY` (new accounts) or `SUBSTREAMS_API_TOKEN` (JWT/legacy accounts). See pitfall #5 for details. This is **data-plane** auth for the streaming endpoint — distinct from the StreamingFast **Portal** admin API. A Portal token (from the `portal-api-jwt` skill) is scoped to Portal routes and will **not** authenticate this self-managed sink. Portal auth is only relevant to the hosted path; to deploy or operate a hosted sink, use the `substreams-hosted-sink` skill, not this one.
 
 > **CLI arg order matters and is non-obvious.** Endpoint is a `-e/--endpoint` flag, NOT positional. The module name is positional but optional — only required if your `.spkg` has multiple sink-compatible output modules (rare). Block range syntax: `START:STOP` or `START:+N` for N blocks forward, or omit STOP for open-ended live tailing.
 
@@ -186,9 +186,9 @@ substreams-sink-sql undo "$DSN" ./my-substreams.spkg --all
 
 For tasks that must NEVER see uncommitted data (e.g. accounting, balances), use Postgres OR run with `--final-blocks-only`.
 
-### Hosted SQL sink
+### Want StreamingFast to host this SQL sink?
 
-> Hosted SQL sink is not yet released. Check https://docs.substreams.dev/how-to-guides/sinks for availability updates.
+If the user would rather not run and babysit the sink themselves, StreamingFast can host it (managed Postgres/ClickHouse, deployed and operated for them). That path is driven entirely through the Portal API — use the `substreams-hosted-sink` skill instead of running the binary locally.
 
 ---
 
@@ -365,17 +365,17 @@ For `EntityChanges` proto setup and module patterns → use the `substreams-dev`
 
 ---
 
-## Hosted vs Self-Hosted Decision
+## Self-Managed vs Hosted Decision
+
+This skill covers the **self-managed** options below — you run the sink. If the user wants zero ops, hand off to `substreams-hosted-sink` (StreamingFast runs it via the Portal API).
 
 | You want                                           | Pick                                |
 |----------------------------------------------------|-------------------------------------|
-| Zero ops, managed Postgres (not yet released)      | StreamingFast hosted (sales@streamingfast.io) / Pinax |
-| Free, you manage the box                           | Self-host `substreams-sink-sql`     |
+| Zero ops, StreamingFast runs the sink              | **Hosted** → `substreams-hosted-sink` skill |
+| Free, you manage the box                           | Self-host `substreams-sink-sql` (this skill) |
 | Subgraph on The Graph network                       | Substreams-powered Subgraph (decentralized) |
-| Files into your data lake                          | Self-host `substreams-sink-files`   |
+| Files into your data lake                          | Self-host `substreams-sink-files` (this skill) |
 | Push events to your existing app                   | Stream SDK (`substreams-sink` skill) |
-
-**Hosted sink is not yet released.** Track https://docs.substreams.dev/how-to-guides/sinks for availability updates.
 
 ---
 

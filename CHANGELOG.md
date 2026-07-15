@@ -42,6 +42,31 @@ All notable changes to this project will be documented in this file.
 
 - Resolved Snyk security findings in skill examples (#9).
 
+### Added
+
+- `substreams-hosted-sink` / `portal-api`: mandatory pre-Deploy offer to test with `substreams run` so users can check data output quality before hosting.
+- `substreams-hosted-sink` (v1.11.0): hardened **⛔ STOP** gate — session flag `OUTPUT_TEST_STATUS`, banned “ready to proceed to hosted deploy?” while unset, explicit order test → engine → deploy.
+- `substreams-hosted-sink` (v1.12.0): quality gate is **`substreams run` command only** (stdout) — forbid local sink / ClickHouse-Postgres sync as the pre-deploy test; prefer handing the user the command.
+- New `portal-api` skill — conversational billing/usage plus full hosted-deployment lifecycle over the Portal API.
+- New `portal-api-jwt` skill — device-code (OAuth 2.0 Device Authorization Grant) login and token refresh; the standard way to authenticate to the Portal API.
+- New `substreams-hosted-sink` skill — deploy and operate a Substreams sink on StreamingFast-hosted infrastructure entirely through the Portal API `HostedService`.
+- `substreams-sql`: mandatory pre-flight choice tree — always offer `substreams-sink-sql` / `substreams-sink-kv` / `substreams-sink-files`; then PostgreSQL vs ClickHouse; then Database Changes vs From proto definition (Postgres only for the mode pair).
+- New **`substreams-ethereum`** skill (v1.0.0) — EVM contract Substreams. Completes the chain-skill split started in `substreams-dev` v1.2.0, which routed EVM work here before the skill existed. Covers:
+  - Pre-flight (one question per turn) and the ABI / Solidity-source / known-signature decoding decision.
+  - `Abigen` + `build.rs` codegen and `match_and_decode`; the mandatory `use substreams_ethereum::Event;` import.
+  - Raw topic0 decoding with indexed-vs-non-indexed rules; verified topic0 constants for ERC-20/721/1155, WETH and Uniswap V2/V3.
+  - `eth_call` / `RpcBatch` with the `set_if_not_exists` cache-store pattern (T3.1: 41% → 100% correctness).
+  - Hard rules: decode logs into typed protobuf, one message type per event, `uint256` → `BigInt` → decimal string.
+  - `references/abi-codegen.md`, `references/rpc-and-tokens.md`, `references/common-contracts.md`.
+- New **`substreams-solana`** skill — Solana program Substreams (`walk_instructions`, SPL, Anchor, no-IDL layouts).
+
+### Changed
+
+- Renamed `substreams-sink-deploy` → `substreams-sink-deploy-local` and scoped it to self-managed sink operation; hosted guidance now lives in `substreams-hosted-sink`.
+- `substreams-sql` (v1.2.0): ClickHouse is **From proto definition only** (Database Changes not supported); added From proto definition guidance; renamed mode terminology to match product docs.
+- `substreams-hosted-sink` (v1.7.0): hard limit that hosted SQL supports **only PostgreSQL and ClickHouse**; always offer engine choice; ClickHouse forbids Database Changes; reject other engines/KV/files as hosted targets.
+- `substreams-dev` (v1.2.0): cross-cutting only — routes agents to `substreams-ethereum` / `substreams-solana` for chain-specific contract/program work; deep EVM eth_call and Solana sections removed from the main skill body.
+
 ## [1.1.0](https://github.com/streamingfast/substreams-skills/releases/tag/v1.1.0)
 
 ### Added

@@ -74,7 +74,7 @@ Wire modules together in `substreams.yaml`, referencing `initialBlock` from the 
 
 > **Also load `substreams-dev`** for Cargo.toml setup, build commands, `initialBlock` guidance, and general Rust module development patterns.
 > **Also load `substreams-sink`** or **`substreams-sql`** when the target output is a SQL sink (`db_out` → Postgres or ClickHouse).
-> **Also load `substreams-sink-deploy`** when ready to run the converted substreams against a live sink (Postgres, ClickHouse, etc.).
+> **Also load `substreams-sink-deploy-local`** when ready to run the converted substreams against a live sink (Postgres, ClickHouse, etc.) on your own infrastructure. For a StreamingFast-hosted sink, use `substreams-hosted-sink` instead.
 
 ```bash
 substreams build

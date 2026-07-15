@@ -1,6 +1,8 @@
 # Database Changes (CDC) Reference
 
-The Database Changes approach streams individual database operations to maintain real-time consistency with the blockchain.
+> **PostgreSQL only.** ClickHouse does **not** support Database Changes mode. For ClickHouse use **From proto definition** (`substreams-sink-sql from-proto`) — see the main skill and [FROM_PROTO.md](https://github.com/streamingfast/substreams-sink-sql/blob/develop/FROM_PROTO.md).
+
+The Database Changes approach streams individual database operations to maintain real-time consistency with the blockchain on **PostgreSQL**.
 
 ## Core Concepts
 

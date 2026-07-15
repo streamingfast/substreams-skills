@@ -1,6 +1,6 @@
 # T7.1 — Deploy a SQL Sink to Postgres
 
-**Skill exercised:** `substreams-sink-deploy`
+**Skill exercised:** `substreams-sink-deploy-local`
 **Model:** claude-sonnet-4-6
 **Result:** PASS — sink installed, schema applied, **537/537 rows match golden** · 5 trials, all PASS once known gotchas were patched into the skill
 

@@ -8,7 +8,7 @@ These skills were tested by giving a Claude agent (`sonnet-4-6`) a plain-English
 - **100% build success** across every trial.
 - **100% run success** across every trial.
 - **12 of 14 tasks** reach byte-level correctness against the golden on the best trial.
-- **Sink-deploy task (T7.1)** reaches functional parity (537 rows match golden) using `substreams-sink-deploy`.
+- **Sink-deploy task (T7.1)** reaches functional parity (537 rows match golden) using `substreams-sink-deploy-local`.
 
 ## Per-task results
 
@@ -27,7 +27,7 @@ These skills were tested by giving a Claude agent (`sonnet-4-6`) a plain-English
 | T5.4 Pump.fun launches | `substreams-dev` | ✅ | ✅ | 100% | |
 | T6.1 Uniswap V2, no ABI JSON | `substreams-dev` | ✅ | ✅ | 100% | Topic0 derived from Solidity source |
 | T6.2 Marinade, no IDL | `substreams-dev` | ✅ | ✅ | 100% | Anchor discriminator derived from Rust source |
-| T7.1 Sink deploy to Postgres | `substreams-sink-deploy` | ✅ | ✅ | 537/537 rows | DSN scheme + composite-PK gotchas surfaced and patched |
+| T7.1 Sink deploy to Postgres | `substreams-sink-deploy-local` | ✅ | ✅ | 537/537 rows | DSN scheme + composite-PK gotchas surfaced and patched |
 
 Detailed example output (manifest, Rust, proto) lives in [`examples/`](examples/).
 

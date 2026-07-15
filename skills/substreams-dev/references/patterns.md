@@ -2,6 +2,8 @@
 
 Collection of proven patterns and best practices for Substreams development.
 
+> **EVM-heavy examples below.** For dedicated contract workflows use the **`substreams-ethereum`** skill. For Solana use **`substreams-solana`**.
+
 > **Note:** Code examples below assume the following imports unless stated otherwise:
 > ```rust
 > use substreams::errors::Error;

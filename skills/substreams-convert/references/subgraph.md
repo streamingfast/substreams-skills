@@ -313,7 +313,7 @@ modules:
 
 #### Step 4d — Deploy to Postgres or ClickHouse
 
-Load the **`substreams-sink-deploy` skill** for the full sink deployment workflow. The short version:
+Load the **`substreams-sink-deploy-local` skill** for the full self-managed sink deployment workflow (or **`substreams-hosted-sink`** for a StreamingFast-hosted sink). The short version:
 
 ```bash
 # Apply schema
@@ -327,7 +327,7 @@ substreams-sink-sql run \
   --on-module-hash-mistmatch=warn
 ```
 
-For ClickHouse, the schema uses `ReplacingMergeTree` instead of plain `PRIMARY KEY` — see the `substreams-sink-deploy` skill for details.
+For ClickHouse, the schema uses `ReplacingMergeTree` instead of plain `PRIMARY KEY` — see the `substreams-sink-deploy-local` skill for details.
 
 > **SQL Delta**: `substreams-database-change` v4 includes SQL Delta support. `tables.update_row()` automatically emits the correct `CREATE` / `UPDATE` / `DELETE` operation based on whether the row already exists, mirroring subgraph's `entity.save()` semantics without requiring explicit `store` modules for persistence.
 

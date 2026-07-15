@@ -31,7 +31,7 @@ All runs use `claude-sonnet-4-6`. For the buildable Substreams project examples,
 
 | Example | Skill(s) | Result |
 |---|---|---|
-| [T7.1 — Deploy SQL sink to Postgres](T7.1-sink-sql-deploy/) | `substreams-sink-deploy` | Sink installed, schema applied, 537 rows match golden |
+| [T7.1 — Deploy SQL sink to Postgres](T7.1-sink-sql-deploy/) | `substreams-sink-deploy-local` | Sink installed, schema applied, 537 rows match golden |
 
 ## Cautionary tales (vague prompts)
 

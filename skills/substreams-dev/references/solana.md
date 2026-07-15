@@ -1,8 +1,10 @@
-# Solana Substreams
+# Solana Substreams (legacy reference)
+
+> **Prefer the `substreams-solana` skill** for full Solana program development (pre-flight, walk_instructions, SPL, Anchor, examples). This file is retained for compatibility with older links.
 
 Solana uses a different block model, instruction paradigm, and account system than EVM chains. Do not apply Ethereum patterns here.
 
-Load this file when working on Solana Substreams. For pure network-ID lookups (mainnet/devnet/accounts) see `networks.md`.
+For pure network-ID lookups (mainnet/devnet/accounts) see `networks.md`.
 
 ## Cargo.toml
 

@@ -1,7 +1,7 @@
 # T7.1 Deployment Notes — sonnet-4-6 / 2026-04-29
 
 ## Skill Discoverability
-`substreams-sink-deploy` was present in the available-skills list. Loaded before task execution. All 3 known gotchas were covered by the skill's "Common Pitfalls" section.
+`substreams-sink-deploy-local` was present in the available-skills list. Loaded before task execution. All 3 known gotchas were covered by the skill's "Common Pitfalls" section.
 
 ## Task Outcome
 PASS — 537 rows in `usdc_transfers` (expected 537).

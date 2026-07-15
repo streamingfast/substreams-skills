@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.16.2
+  version: 1.16.3
   author: StreamingFast
   documentation: https://docs.substreams.dev
 ---
@@ -96,6 +96,8 @@ JSON wire form follows proto3 JSON mapping in **requests** (prefer **snake_case*
 - **Zero values are omitted.** Proto3 JSON drops default/zero fields. Missing `plan_tier` often means `PLAN_TIER_COMMUNITY` (0); missing `total_cents` / `borrowed_workers` / `active_requests` often means `0`, not “unknown.” Treat absent numeric fields as zero when summarizing.
 - **`int64` / `uint64` may arrive as JSON strings** (`"maxWorkers": "5"`, `"egressBytesQuota": "5368709120"`). Coerce with `Number(...)` / `int(...)` before math or formatting.
 - **Empty objects are valid.** `GetBillingDetails` may return `{}` when the org has no company profile filled in; a scaled-down deployment may have `"state": {}` on `ListDeployments` / empty `deploymentState` on `GetDeploymentState` even when `success: true`.
+- **Unknown request fields are silently ignored — they do NOT error.** The server decodes with `DiscardUnknown`, so a misspelled or removed field (e.g. `storage_class`, `sink_config`, `replicas` instead of `replica`) is dropped and the call still returns `200` / `success: true`. A typo therefore surfaces as *the setting didn't take effect*, never as `invalid_argument`. Spell field names exactly as the proto above; when a deployed config doesn't match what you sent, suspect a dropped field first. Enum fields are still validated — an invalid enum *value* does error.
+- **Requests accept snake_case or camelCase**, but **responses are camelCase only** (no snake_case duplicates). Prefer snake_case in requests; always read camelCase in responses.
 
 ## The Endpoints — Inline Proto
 
@@ -232,7 +234,11 @@ message DeploymentRequest {
 }
 message DeploymentResult {}                            // empty on success
 
-message ReplicaRequest {                               // SetReplica — scale up/down; count 0 = pause
+// SetReplica — scale up/down; count 0 = pause.
+// NOTE: this request type is sf.hosted.common.v1.ReplicaRequest — it lives in the
+// hosted module, not sf.portalapi.v1 (its response, ReplicaResponse, IS portalapi).
+// The JSON body is unaffected; the fields are exactly as below.
+message ReplicaRequest {   // package: sf.hosted.common.v1
   string deployment_id = 1;
   int64  count         = 2;
   string organization_id = 3;
@@ -300,16 +306,26 @@ message FoundationalStoreDeployment {
 }
 
 message FoundationalStoreConfig {
-  string         type_url             = 2;   // e.g. "sf.substreams.solana.spl.v1.AccountOwner"
-  string         network              = 3;
-  bool           no_time_traversal    = 7;
-  string         storage_class        = 9;   // e.g. "standard", "gcpssd-lazy"
-  ResourceConfig resources            = 10;
-  string         token                = 11;  // substreams API token
-  string         substreams_parameters = 12;
+  string type_url              = 2;   // e.g. "sf.substreams.solana.spl.v1.AccountOwner"
+  string network               = 3;
+  bool   no_time_traversal     = 7;
+  string token                 = 10;  // substreams API token
+  string substreams_parameters = 11;
+  FoundationalStoreMode mode   = 12;
+  reserved 9;                         // was storage_class — removed upstream
 }
 
-message ResourceConfig { string cpu_request = 1; string cpu_limit = 2; string memory_request = 3; string memory_limit = 4; }
+enum FoundationalStoreMode {
+  FOUNDATIONAL_STORE_MODE_UNSPECIFIED = 0;  // server default (Substreams)
+  FOUNDATIONAL_STORE_MODE_SUBSTREAMS  = 1;
+  FOUNDATIONAL_STORE_MODE_REMOTE_FEED = 2;
+}
+// There is no `storage_class` and no `resources` / ResourceConfig on this message —
+// both were removed upstream. Pod resources and storage class are NOT
+// agent-configurable; the runner applies its defaults. Sending either field is
+// silently dropped (see "Wire quirks"), so the deployment will come up with default
+// resources and nobody will be told. If a user needs custom CPU/memory/storage,
+// say it can't be set through this API and point them at StreamingFast support.
 
 message SubstreamsPackage {
   oneof source {
@@ -646,9 +662,9 @@ message GetDeploymentResponse {
 message Deployment {
   string deployment_id = 1;
   string name          = 2;
-  // field 3 (raw api_key secret) is reserved/removed — never returned
-  // sf.hosted.common.v1.DeploymentRequest deployment_request = 4;
+  sf.hosted.common.v1.DeploymentRequest deployment_request = 4;  // verbose; see note above
   string api_key_id    = 5;
+  reserved 3;            // was api_key (raw secret) — removed; never returned
 }
 
 message DeploymentStateResponse {
@@ -1053,7 +1069,9 @@ Skip the daily chart by default; offer it as a follow-up.
 
 ## Error Handling
 
-ConnectRPC returns HTTP status + JSON `{ "code": "...", "message": "..." }`.
+ConnectRPC returns HTTP status + JSON `{ "code": "...", "message": "...", "details": [...] }`. The `details` array carries an `sf.portalapi.v1.ErrorDetail` whose `debug.fields` names the offending field on `invalid_argument` — use it to locate a bad field instead of guessing. Report `message` to the user, not the raw envelope.
+
+A **plain-text `404 page not found`** (not JSON) means the method name or service path is wrong — check the `{Service}/{Method}` spelling rather than treating it as a Portal error.
 
 | Code | Meaning | Action |
 |---|---|---|
@@ -1069,7 +1087,20 @@ Never include the access token or refresh token in error output shown to the use
 
 The proto fragments above are inlined snapshots of the upstream definitions in `sf-saas-priv` (`proto/sf/portalapi/v1/portalapi.proto`, `hosted_service.proto`, `proto/sf/common/v1/types.proto`, and the `sf.hosted.common.v1` buf dependency). When the upstream proto changes in a way that affects one of the documented routes (new field, renamed field, new enum value, new method signature), update SKILL.md to match and bump `metadata.version`. The agent-callable set is gated server-side by `api/auth/agent_allowed_routes.go` — if a route isn't in that map it returns `unauthenticated` no matter what this doc says, so keep the two in sync. Note `HasDeploymentSecret` IS agent-callable but `StoreDeploymentSecret` is deliberately NOT (the password is entered by the user in the web UI, so an agent never writes it) — don't add it to the allowlist or call it from here. The `HostedService` payload types live in the external `buf.build/streamingfast/hosted-service` module, so they can change independently of `sf-saas-priv`.
 
-If the assistant ever sees `invalid_argument` for what should be a valid body, or a response missing a documented field, the most likely cause is that this skill is out of date. Tell the user.
+**Verifying this skill against the live server.** The production server exposes gRPC
+reflection, which is the authoritative check and needs no repo access and no token:
+
+```bash
+grpcurl admin.streamingfast.io:443 list
+grpcurl admin.streamingfast.io:443 describe sf.portalapi.v1.HostedService
+grpcurl -protoset-out portal.protoset admin.streamingfast.io:443 describe sf.portalapi.v1.PortalApi
+grpcurl -protoset portal.protoset describe sf.common.v1.Subscription   # then offline
+```
+
+Reflection resolves the imported `sf.hosted.common.v1.*` types too, so it covers the
+whole surface documented here.
+
+If the assistant ever sees `invalid_argument` for what should be a valid body, or a response missing a documented field, the most likely cause is that this skill is out of date. Tell the user. Note the inverse failure is quieter and more likely: because unknown fields are **silently discarded**, a field this skill documents but the server has since removed produces a **successful call that ignores the setting**, with no error at all. When a config doesn't take effect, re-check the field against reflection before assuming a server bug.
 
 ## Things the Assistant Should NOT Do
 

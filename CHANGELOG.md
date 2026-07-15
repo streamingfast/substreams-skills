@@ -6,9 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `substreams-solana` (v1.4.1): crate matrix updated to **`substreams 0.7` + `substreams-solana 0.15`** (legacy `0.6`+`0.14.x` only); clarify same-layout multi-disc messages (e.g. swap/swap_v2); index modules use `kind: blockIndex`; manifest example includes `package.url`/`description`.
+- `substreams-dev` / legacy Solana notes / `substreams-convert`: align Solana Cargo pins with the matched-pair matrix (was incorrectly `0.6`+`0.15` or still on `0.14.3`).
 - `substreams-sink` (v1.3.1): correct Go quickstart to monorepo API (`github.com/streamingfast/substreams/sink`, `NewFromViper` + `NewSinkerHandlers`); fix JS quickstart to official `streamBlocks` + `createGrpcTransport`; note entity-change v2 still pins `substreams ^0.6`; add skill routing vs sql/deploy-local/hosted-sink; align JS reference with gRPC transport.
 - `substreams-dev` (v1.3.1): short registry form `name@version` and `@latest` do not resolve via the CLI (rewrites to `substreams.dev/v1/packages/...` HTML 404) — prefer `https://spkg.io/v1/packages/<slug>/<version>` for `imports:`, `substreams run`/`info`, and head-block lookup; document relative `-t` + `-s -1` limitation.
-- `substreams-dev`: package metadata example used unprefixed `version: 1.3.0` (must be `v`-prefixed); update Solana crate guidance to `0.15`; clarify `substreams-entity-change` v2 still pins `substreams ^0.6` so graph_out should keep inlining EntityChanges.
+- `substreams-dev`: package metadata example used unprefixed `version: 1.3.0` (must be `v`-prefixed); update Solana crate guidance to `0.15`+`substreams 0.7`; clarify `substreams-entity-change` v2 still pins `substreams ^0.6` so graph_out should keep inlining EntityChanges.
 - `portal-api` (v1.16.1): upgrade/downgrade rubric compared `total_cents` to `base_price × 100` even though both fields are already integer cents — compare cents directly.
 - `portal-api`: clarify `DeployDatabase` attaches an existing Postgres connection only (does not provision a DB; no `clickhouse_spec` — use Deploy `outputConfig.clickhouse`); note serverless DB cold-start retries on Deploy.
 - `portal-api`: document production JSON quirks verified live — proto3 omits zeros (e.g. missing `plan_tier` ≈ Community), `int64`/`uint64` may be strings, empty billing/state objects are valid; deployment IDs are server UUIDs (not only a `dep` prefix).

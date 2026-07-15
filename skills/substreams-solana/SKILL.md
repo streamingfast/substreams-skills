@@ -11,7 +11,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.4.0
+  version: 1.4.1
   author: StreamingFast
   documentation: https://docs.substreams.dev/how-to-guides/develop-your-own-substreams/solana
 ---
@@ -33,12 +33,14 @@ Solana is **not** EVM. Do not use ABI/logs/topics patterns here. Decoding model 
 
 | Required | Forbidden |
 |---|---|
-| e.g. `message Swap { … }`, `message SwapV2 { … }`, `message Deposit { … }` | One generic `Event` / `Instruction` with optional fields for every ix |
-| Distinct message per instruction name/discriminator the user asked for | Shared bag: `string instruction_name` + `map` / sparse optional args |
+| e.g. `message Swap { … }`, `message Deposit { … }` — one type per **distinct layout** | One generic `Event` / `Instruction` with optional fields for every ix |
+| Distinct message per instruction the user asked for (different args/accounts) | Shared bag: `string instruction_name` + `map` / sparse optional args |
 | Module output may wrap them: `repeated Swap swaps` **and** `repeated Deposit deposits`, or `oneof` of **those** messages | Single table of mixed rows with unused columns for other ixs |
 | Parse args after the discriminator into **named typed values** | Leave `data` as `bytes` / hex / base64 |
 | Map account metas to **named fields** (`pool`, `user`, `mint`, …) | Dump the whole instruction as JSON |
 | | `instruction_data_json`, `raw_data`, `args_json`, `serde_json::to_string` |
+
+**Same layout, multiple discriminators:** when two instructions share args + account layout (e.g. Raydium CLMM `swap` / `swap_v2` in T5.3), one message type is fine — match either disc, decode the same fields. Split only when layouts or account maps diverge.
 
 **Why:** sinks, SQL (`schema.table` per message), and consumers need stable per-instruction schemas — not opaque blobs or a one-size-fits-all row.
 
@@ -197,10 +199,17 @@ Details: [references/loops-and-filters.md](./references/loops-and-filters.md).
 
 ## Cargo.toml
 
+**Prefer the current pair** (new projects). Do not mix majors across the table.
+
+| Pair | When |
+|---|---|
+| `substreams = "0.7"` + `substreams-solana = "0.15"` | **Default** — `substreams-solana` 0.15 depends on substreams 0.7 |
+| `substreams = "0.6"` + `substreams-solana = "0.14"` | Existing packages / examples that still pin 0.14.x |
+
 ```toml
 [dependencies]
-substreams = "0.6"             # Stay on 0.6.x — substreams-solana 0.14.x is not yet compatible with substreams 0.7
-substreams-solana = "0.14.3"
+substreams = "0.7"
+substreams-solana = "0.15"
 bs58 = "0.4"
 prost = "0.13"
 prost-types = "0.13"
@@ -218,6 +227,8 @@ opt-level = "s"
 strip = "debuginfo"
 ```
 
+**Do not** combine `substreams = "0.6"` with `substreams-solana = "0.15"` (or `0.7` with `0.14`) — dual trees / link errors. Re-check [crates.io/crates/substreams-solana](https://crates.io/crates/substreams-solana) before assuming these pins forever.
+
 No `abi/` or `substreams-ethereum-abigen` for Solana projects.
 
 ## Manifest
@@ -226,7 +237,10 @@ No `abi/` or `substreams-ethereum-abigen` for Solana projects.
 specVersion: v0.1.0
 package:
   name: my_solana_substreams
-  version: v0.1.0
+  version: v0.1.0              # must be v-prefixed
+  url: https://github.com/myorg/my-solana-substreams
+  description: What this Solana substreams indexes
+  # do not add package.doc — write README.md beside the manifest instead
 network: solana
 modules:
   - name: map_my_module
@@ -395,7 +409,7 @@ After generators, still enforce pre-flight instruction list and account filters 
 | Far fewer events than expected | You used top-level `message.instructions` — switch to `walk_instructions()` |
 | Empty output | Wrong program ID, wrong disc, `initialBlock` past data, or filtering failed txs incorrectly |
 | Mint filter never matches | Using SPL `Transfer` (3) instead of `TransferChecked` (12) |
-| WASM / prost errors | Pin `substreams = "0.6"` with `substreams-solana = "0.14.x"`; clean `target` |
+| WASM / prost / link errors | Use a matched pair: `0.7`+`0.15` or `0.6`+`0.14.x` — never mix; `rm -rf target` and rebuild |
 | Wrong account field | Re-check IDL account order or `Accounts` struct — do not guess indexes |
 | Output is hex/base64/JSON of ix data | **Decode** into typed proto fields — see [Hard rule](#hard-rule-decode-instruction-data-into-structured-objects) |
 | Only discriminator / program filter, no args | Incomplete — parse payload + named accounts for every emitted instruction |

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- `portal-api` (v1.16.1): upgrade/downgrade rubric compared `total_cents` to `base_price × 100` even though both fields are already integer cents — compare cents directly.
+- `portal-api`: clarify `DeployDatabase` attaches an existing Postgres connection only (does not provision a DB; no `clickhouse_spec` — use Deploy `outputConfig.clickhouse`); note serverless DB cold-start retries on Deploy.
+- `portal-api`: document production JSON quirks verified live — proto3 omits zeros (e.g. missing `plan_tier` ≈ Community), `int64`/`uint64` may be strings, empty billing/state objects are valid; deployment IDs are server UUIDs (not only a `dep` prefix).
+- `portal-api-jwt` (v1.5.1): frontmatter `name` aligned with directory (`portal-api-jwt`, was `portal-api-auth`).
+- README: remove incorrect claim of automatic schema-drift proto fetch; document that agents wait for user confirmation on device login (no background poll).
+
 ## [1.3.0](https://github.com/streamingfast/substreams-skills/releases/tag/v1.3.0)
 
 ### Fixed

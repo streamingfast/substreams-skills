@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.16.0
+  version: 1.16.1
   author: StreamingFast
   documentation: https://docs.substreams.dev
 ---
@@ -89,7 +89,13 @@ Pipe through `jq` to extract only the fields needed for the answer. Never dump r
 
 `$ACCESS_TOKEN` is the Bearer token from the [`portal-api-jwt`](../portal-api-jwt/SKILL.md) login (see First-Run Setup). If a call returns `unauthenticated`, the token has likely expired — refresh it per that skill and retry; don't re-prompt the user.
 
-JSON wire form follows proto3 JSON mapping in **requests** (prefer **snake_case** field names). **Responses often use camelCase** (`deploymentId`, `organizationId`, `accessToken`, `exists`, …). When parsing, accept **both** casings. Enum values are full strings (e.g. `"DATE_FILTER_CURRENT_MONTH"`, `"DEVICE_TOKEN_STATUS_APPROVED"`).
+JSON wire form follows proto3 JSON mapping in **requests** (prefer **snake_case** field names). **Responses often use camelCase** (`deploymentId`, `organizationId`, `accessToken`, `exists`, `planName`, `substreamsConfig`, …). When parsing, accept **both** casings. Enum values are full strings (e.g. `"DATE_FILTER_CURRENT_MONTH"`, `"DEVICE_TOKEN_STATUS_APPROVED"`).
+
+**Wire quirks agents hit in production:**
+
+- **Zero values are omitted.** Proto3 JSON drops default/zero fields. Missing `plan_tier` often means `PLAN_TIER_COMMUNITY` (0); missing `total_cents` / `borrowed_workers` / `active_requests` often means `0`, not “unknown.” Treat absent numeric fields as zero when summarizing.
+- **`int64` / `uint64` may arrive as JSON strings** (`"maxWorkers": "5"`, `"egressBytesQuota": "5368709120"`). Coerce with `Number(...)` / `int(...)` before math or formatting.
+- **Empty objects are valid.** `GetBillingDetails` may return `{}` when the org has no company profile filled in; a scaled-down deployment may have `"state": {}` on `ListDeployments` / empty `deploymentState` on `GetDeploymentState` even when `success: true`.
 
 ## The Endpoints — Inline Proto
 
@@ -206,9 +212,10 @@ message HasDeploymentSecretResponse { bool exists = 1; }
 ### Hosted-deployment request messages — mutations (confirm first)
 
 ```proto
-// CreateDeployment mints a fresh, unique deployment_id (server-generated, prefix
-// "dep"). Call it FIRST and reuse the returned id for the secret page,
-// HasDeploymentSecret (after user confirmation), and Deploy. Never invent the id.
+// CreateDeployment mints a fresh, unique deployment_id (server-generated —
+// typically a UUID; do not assume a fixed "dep" prefix). Call it FIRST and reuse
+// the returned id for the secret page, HasDeploymentSecret (after user
+// confirmation), and Deploy. Never invent the id.
 message CreateDeploymentRequest  { string organization_id = 1; }
 message CreateDeploymentResponse { string deployment_id = 1; }
 
@@ -252,9 +259,12 @@ message UpdateDeploymentConfigRequest {
 message DeleteDeploymentConfigRequest    { string deployment_id = 1; string organization_id = 2; }
 message CleanupOrphanedDeploymentRequest { string deployment_id = 1; string organization_id = 2; }
 
-message DeployDatabaseRequest {        // provision/attach the output DB for a deployment
+message DeployDatabaseRequest {        // attach/validate the user's existing Postgres
+                                       // connection — does NOT provision a database.
   string deployment_id = 1;
-  sf.hosted.common.v1.Postgres postgres_spec = 2;
+  sf.hosted.common.v1.Postgres postgres_spec = 2; // Postgres only; there is no clickhouse_spec.
+                                       // For ClickHouse, put connection fields in Deploy's
+                                       // outputConfig.clickhouse instead.
   string organization_id = 3;
   bool   use_stored_secret = 4;        // PREFERRED: ignore postgres_spec.password and
                                        // resolve it server-side from the deployment's
@@ -915,10 +925,10 @@ Rubric, in order:
 1. `GetOrganizationSubscription` — current `plan_tier`, `overage_type`, `base_price`, `service_config` quotas.
 2. `GetUsageBilling` (`{"usage":{}}`) — projected `total_cents`.
 3. `MultiServiceUsageSummaryByOrganization` — raw consumption (`current_month` bucket).
-4. Compare:
-   - `total_cents` ≤ `base_price` × 100 **and** consumption < 50% of quota for two periods → suggest downgrade.
-   - `total_cents` > `base_price` × 100 **and** `overage_type == OVERAGE_TYPE_METERED` → paying overages; if a higher tier's base price would undercut projected total, suggest upgrade.
-   - `total_cents` > `base_price` × 100 **and** `overage_type == OVERAGE_TYPE_STRICT` (or `substreams_quota_exceeded == true`) → hitting cap; strongly suggest upgrade.
+4. Compare (both sides are **integer cents** — do **not** multiply `base_price` by 100):
+   - `total_cents` ≤ `base_price` **and** consumption < 50% of quota for two periods → suggest downgrade.
+   - `total_cents` > `base_price` **and** `overage_type == OVERAGE_TYPE_METERED` → paying overages; if a higher tier's base price would undercut projected total, suggest upgrade.
+   - `total_cents` > `base_price` **and** `overage_type == OVERAGE_TYPE_STRICT` (or `substreams_quota_exceeded == true`) → hitting cap; strongly suggest upgrade.
    - Else → hold.
 5. Phrase as advice. Do **not** change the plan — billing/subscription mutations are out of scope (only the Portal UI does that).
 
@@ -974,7 +984,7 @@ Gather inputs **one field at a time** (choices + custom where applicable) — ne
 
 Deploy confirmation must restate how quality was handled (`tested_ok` / `user_verified` / `skipped`).
 
-**Password:** secure stored-secret flow only — see below. Sequence: (1) mint `deployment_id` via `CreateDeployment`; (2) user stages password on the secure page — **wait for user confirmation**, then **one** `HasDeploymentSecret` check (no background poll); (3) confirm plan; (4) `Deploy` with `use_stored_secret: true` and empty `password`. Do **not** supply an API key. **`Deploy` may return HTTP 200 + empty `{}`** — treat as success and follow up with `GetDeploymentState`.
+**Password:** secure stored-secret flow only — see below. Sequence: (1) mint `deployment_id` via `CreateDeployment`; (2) user stages password on the secure page — **wait for user confirmation**, then **one** `HasDeploymentSecret` check (no background poll); (3) confirm plan; (4) `Deploy` with `use_stored_secret: true` and empty `password`. Do **not** supply an API key. **`Deploy` may return HTTP 200 + empty `{}`** — treat as success and follow up with `GetDeploymentState`. If the first `Deploy` fails with a connection timeout/refused against a serverless output DB (cold start), retry 2–3 times waiting ~30–60s — tell the user the DB may be waking up; only treat auth/host-not-found as hard failures immediately.
 
 ### "Provide the database password" / deploy the output DB (mutation — confirm first)
 

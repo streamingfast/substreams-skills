@@ -24,46 +24,25 @@ Each change specifies:
 
 ## Protobuf Schema
 
-### Complete Schema Definition
+**Do not define `DatabaseChanges` yourself.** Import the official type via the `substreams-sink-database-changes` spkg and the `substreams-database-change` Rust crate (v4 FQN):
 
-```protobuf
-syntax = "proto3";
+`proto:sf.substreams.sink.database.v1.DatabaseChanges`  
+`use substreams_database_change::pb::sf::substreams::sink::database::v1::DatabaseChanges;`
 
-package db_out;
-
-message DatabaseChanges {
-  repeated TableChange table_changes = 1;
-}
-
-message TableChange {
-  string table = 1;           // Table name
-  string pk = 2;              // Primary key value
-  uint64 ordinal = 3;         // Ordering for reorgs
-  Operation operation = 4;    // Type of change
-  repeated Field fields = 5;  // Changed fields
-
-  enum Operation {
-    UNSPECIFIED = 0;
-    CREATE = 1;     // INSERT
-    UPDATE = 2;     // UPDATE  
-    DELETE = 3;     // DELETE
-  }
-}
-
-message Field {
-  string name = 1;        // Column name
-  string new_value = 2;   // New value (for CREATE/UPDATE)
-  string old_value = 3;   // Previous value (for UPDATE/DELETE)
-}
-```
+The sink applies each `TableChange` (CREATE / UPDATE / DELETE / UPSERT + field values + ordinals). Prefer the `Tables` helper over hand-building protos.
 
 ### Usage Examples
 
 **Creating Records**:
 ```rust
+// Multi-column PRIMARY KEY (tx_hash, log_index) — use column/value tuples
+// matching schema.sql. Do not string-concat when the table has composite PKs.
+let log_index = transfer.log_index.to_string();
 tables
-    .create_row("transfers", format!("{}-{}", tx_hash, log_index))
-    .set("tx_hash", tx_hash)
+    .create_row(
+        "transfers",
+        [("tx_hash", tx_hash.as_str()), ("log_index", log_index.as_str())],
+    )
     .set("from_addr", transfer.from)
     .set("to_addr", transfer.to)
     .set("amount", transfer.amount.to_string())
@@ -99,15 +78,19 @@ pub fn db_out(events: Events) -> Result<DatabaseChanges, Error> {
     let mut tables = Tables::new();
 
     for transfer in events.erc20_transfers {
-        // Create transfer record
-        let transfer_id = format!("{}-{}", transfer.tx_hash, transfer.log_index);
+        // Create transfer record — composite PK matches schema PRIMARY KEY
+        let log_index = transfer.log_index.to_string();
         tables
-            .create_row("erc20_transfers", transfer_id)
-            .set("tx_hash", &transfer.tx_hash)
-            .set("log_index", transfer.log_index)
+            .create_row(
+                "erc20_transfers",
+                [
+                    ("tx_hash", transfer.tx_hash.as_str()),
+                    ("log_index", log_index.as_str()),
+                ],
+            )
             .set("contract_address", &transfer.contract)
             .set("from_addr", &transfer.from)
-            .set("to_addr", &transfer.to)  
+            .set("to_addr", &transfer.to)
             .set("amount", transfer.amount.to_string())
             .set("block_number", transfer.block_number)
             .set("block_timestamp", transfer.timestamp);
@@ -272,11 +255,16 @@ pub fn db_out(block: Block) -> Result<DatabaseChanges, Error> {
 
 **Good Primary Keys**:
 ```rust
-// Composite keys for uniqueness
-format!("{}:{}", tx_hash, log_index)          // Transfer events
-format!("{}:{}:{}", pool, user, position)     // LP positions  
-format!("{}:{}", contract, holder)            // Token balances
-format!("{}:{}", block_number, tx_index)      // Transaction ordering
+// Preferred: composite PK matching schema PRIMARY KEY (col1, col2, …)
+let log_index = log_index.to_string();
+tables.create_row("transfers", [
+    ("tx_hash", tx_hash.as_str()),
+    ("log_index", log_index.as_str()),
+]);
+
+// Single-column PK: plain string is fine
+tables.create_row("balances", &holder_address);
+tables.update_row("token_balances", &format!("{}:{}", contract, holder));
 ```
 
 **Avoid**:
@@ -286,6 +274,10 @@ tables.create_row("transfers", "AUTO_INCREMENT")  // BAD
 
 // Don't use non-deterministic keys  
 tables.create_row("events", uuid::new())          // BAD
+
+// Don't string-concat when schema has multi-column PRIMARY KEY
+// (PK mismatch → silent wrong rows or setup/run failures)
+tables.create_row("transfers", format!("{}:{}", tx_hash, log_index))  // BAD if PK is (tx_hash, log_index)
 ```
 
 ### Field Types and Validation

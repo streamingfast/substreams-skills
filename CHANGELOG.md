@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `substreams-sql` (v1.3.1): composite primary keys must use column/value tuples matching `schema.sql` (not string-concat keys); CDC manifest example uses a `v`-prefixed `package.version`; remove anti-pattern of module-level last-block skip (sink owns cursors); correct Postgres MV refresh guidance; note `--batch-block-flush-interval` for short smoke runs; align T2.3 database-changes import to v4.0.0 spkg with crate v4; README SQL blurb uses From-proto terminology and ClickHouse mode lock.
 - `substreams-dev` (v1.3.1): short registry form `name@version` and `@latest` do not resolve via the CLI (rewrites to `substreams.dev/v1/packages/...` HTML 404) — prefer `https://spkg.io/v1/packages/<slug>/<version>` for `imports:`, `substreams run`/`info`, and head-block lookup; document relative `-t` + `-s -1` limitation.
 - `substreams-dev`: package metadata example used unprefixed `version: 1.3.0` (must be `v`-prefixed); update Solana crate guidance to `0.15`; clarify `substreams-entity-change` v2 still pins `substreams ^0.6` so graph_out should keep inlining EntityChanges.
 - `portal-api` (v1.16.1): upgrade/downgrade rubric compared `total_cents` to `base_price × 100` even though both fields are already integer cents — compare cents directly.

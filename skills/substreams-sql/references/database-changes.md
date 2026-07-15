@@ -1,510 +1,219 @@
 # Database Changes (CDC) Reference
 
-> **PostgreSQL only.** ClickHouse does **not** support Database Changes mode. For ClickHouse use **From proto definition** (`substreams-sink-sql from-proto`) — see the main skill and [FROM_PROTO.md](https://github.com/streamingfast/substreams-sink-sql/blob/develop/FROM_PROTO.md).
+Deep reference for the `DatabaseChanges` mapping mode. See `SKILL.md` for mode selection.
 
-The Database Changes approach streams individual database operations to maintain real-time consistency with the blockchain on **PostgreSQL**.
+Verified against `substreams-database-change` **4.0.0** and `substreams-sink-sql` **v4.13.1**.
 
-## Core Concepts
+## Engine support
 
-### Change Data Capture (CDC)
+Works on **both** PostgreSQL and ClickHouse, but only PostgreSQL is generally useful:
 
-CDC tracks and streams individual row-level changes to database tables:
-- **CREATE**: Insert new rows
-- **UPDATE**: Modify existing rows  
-- **DELETE**: Remove rows
-- **ORDINAL**: Ordering for reorg handling
+| | PostgreSQL | ClickHouse |
+|---|---|---|
+| INSERT | ✅ | ✅ |
+| UPDATE / DELETE / upsert | ✅ | ❌ — `OnlyInserts()=true`, every op becomes an insert |
+| Delta ops (`add`/`sub`/`min`/`max`/`set_if_null`) | ✅ (sink >= v4.12.0) | ❌ |
+| DB-side reorg handling | ✅ | ❌ — `Revert()` errors; history path panics |
+| Duplicate PKs | rejected | allowed (`AllowPkDuplicates()=true`) |
 
-### Table Operations
+On ClickHouse you must pass `--undo-buffer-size > 0` to `run` (the default `0` turns on DB-side reorg handling, which ClickHouse cannot do). Since the mode is insert-only there anyway, prefer **from-proto** for ClickHouse.
 
-Each change specifies:
-- **Table name**: Target database table
-- **Primary key**: Unique identifier for the row
-- **Operation type**: CREATE, UPDATE, or DELETE
-- **Field changes**: New and old values for modified columns
+## Setup
 
-## Protobuf Schema
+```toml
+[dependencies]
+substreams-database-change = "4"   # 4.0.0 — prost 0.13, substreams ^0.7.3
+```
 
-**Do not define `DatabaseChanges` yourself.** Import the official type via the `substreams-sink-database-changes` spkg and the `substreams-database-change` Rust crate (v4 FQN):
+Import the official spkg; do not define the proto yourself:
 
-`proto:sf.substreams.sink.database.v1.DatabaseChanges`  
-`use substreams_database_change::pb::sf::substreams::sink::database::v1::DatabaseChanges;`
+```yaml
+imports:
+  database: https://github.com/streamingfast/substreams-sink-database-changes/releases/download/v4.0.0/substreams-sink-database-changes-v4.0.0.spkg
+```
 
-The sink applies each `TableChange` (CREATE / UPDATE / DELETE / UPSERT + field values + ordinals). Prefer the `Tables` helper over hand-building protos.
+Module output type:
 
-### Usage Examples
+```yaml
+output:
+  type: proto:sf.substreams.sink.database.v1.DatabaseChanges
+```
 
-**Creating Records**:
+> This FQN has been **stable since v1**. v4 renamed only the *Rust module path*: use
+> `substreams_database_change::pb::sf::substreams::sink::database::v1::DatabaseChanges`.
+> The old `pb::database::DatabaseChanges` is a deprecated type alias — it still compiles in v4.
+
+## The `Tables` API
+
 ```rust
-// Multi-column PRIMARY KEY (tx_hash, log_index) — use column/value tuples
-// matching schema.sql. Do not string-concat when the table has composite PKs.
+pub fn new() -> Self
+pub fn create_row<K: Into<PrimaryKey>>(&mut self, table: &str, key: K) -> &mut Row
+pub fn update_row<K: Into<PrimaryKey>>(&mut self, table: &str, key: K) -> &mut Row
+pub fn upsert_row<K: Into<PrimaryKey>>(&mut self, table: &str, key: K) -> &mut Row
+pub fn delete_row<K: Into<PrimaryKey>>(&mut self, table: &str, key: K) -> &mut Row
+pub fn to_database_changes(self) -> DatabaseChanges   // consumes self
+```
+
+Row methods:
+
+```rust
+pub fn set<T: ToDatabaseValue>(&mut self, name: &str, value: T) -> &mut Self
+pub fn set_if_null<T: ToDatabaseValue>(&mut self, name: &str, value: T) -> &mut Self
+pub fn add<T: NumericAddable>(&mut self, name: &str, value: T) -> &mut Self
+pub fn sub<T: NumericAddable>(&mut self, name: &str, value: T) -> &mut Self
+pub fn max<T: NumericComparable>(&mut self, name: &str, value: T) -> &mut Self
+pub fn min<T: NumericComparable>(&mut self, name: &str, value: T) -> &mut Self
+```
+
+Ordinals are assigned automatically on first touch and sorted in `to_database_changes()`. The field is private — you cannot and need not manage them.
+
+## Primary keys
+
+`PrimaryKey` is an **enum**, not a trait:
+
+```rust
+pub enum PrimaryKey {
+    Single(String),
+    Composite(BTreeMap<String, String>),
+}
+```
+
+`Into<PrimaryKey>` impls:
+
+| Input | Result |
+|---|---|
+| `&str` / `String` / `&String` | `Single` |
+| `[(K, &str); N]` where `K: AsRef<str>` | `Composite` |
+| `[(K, String); N]` where `K: AsRef<str>` | `Composite` |
+
+```rust
+// ✅ single
+tables.update_row("balances", address.as_str());
+
+// ✅ composite — fixed-size array, homogeneous value type
 let log_index = transfer.log_index.to_string();
-tables
-    .create_row(
-        "transfers",
-        [("tx_hash", tx_hash.as_str()), ("log_index", log_index.as_str())],
-    )
-    .set("from_addr", transfer.from)
-    .set("to_addr", transfer.to)
-    .set("amount", transfer.amount.to_string())
-    .set("block_number", block.number);
-```
-
-**Updating Records**:
-```rust
-tables
-    .update_row("balances", address.clone())
-    .set("balance", new_balance.to_string())
-    .set("last_updated", block.number);
-```
-
-**Deleting Records**:
-```rust
-tables
-    .delete_row("expired_orders", order_id);
-```
-
-## Implementation Patterns
-
-### ERC20 Transfer Processing
-
-```rust
-use substreams::prelude::*;
-use substreams_database_change::pb::sf::substreams::sink::database::v1::DatabaseChanges;
-use substreams_database_change::tables::Tables;
-use substreams_ethereum::pb::eth::v2::Block;
-
-#[substreams::handlers::map]
-pub fn db_out(events: Events) -> Result<DatabaseChanges, Error> {
-    let mut tables = Tables::new();
-
-    for transfer in events.erc20_transfers {
-        // Create transfer record — composite PK matches schema PRIMARY KEY
-        let log_index = transfer.log_index.to_string();
-        tables
-            .create_row(
-                "erc20_transfers",
-                [
-                    ("tx_hash", transfer.tx_hash.as_str()),
-                    ("log_index", log_index.as_str()),
-                ],
-            )
-            .set("contract_address", &transfer.contract)
-            .set("from_addr", &transfer.from)
-            .set("to_addr", &transfer.to)
-            .set("amount", transfer.amount.to_string())
-            .set("block_number", transfer.block_number)
-            .set("block_timestamp", transfer.timestamp);
-
-        // Update sender balance
-        if let Some(from_balance) = transfer.from_balance {
-            tables
-                .update_row("token_balances", format!("{}:{}", transfer.contract, transfer.from))
-                .set("balance", from_balance.to_string())
-                .set("last_updated", transfer.block_number);
-        }
-
-        // Update receiver balance  
-        if let Some(to_balance) = transfer.to_balance {
-            tables
-                .update_row("token_balances", format!("{}:{}", transfer.contract, transfer.to))
-                .set("balance", to_balance.to_string())
-                .set("last_updated", transfer.block_number);
-        }
-    }
-
-    Ok(tables.to_database_changes())
-}
-```
-
-### Complex State Management
-
-```rust
-#[substreams::handlers::map]
-pub fn db_out(
-    pool_events: PoolEvents, 
-    price_store: StoreGetProto<TokenPrice>
-) -> Result<DatabaseChanges, Error> {
-    let mut tables = Tables::new();
-
-    for swap in pool_events.swaps {
-        // Record swap transaction
-        let swap_id = format!("{}:{}:{}", swap.tx_hash, swap.log_index, swap.pool_address);
-        tables
-            .create_row("pool_swaps", swap_id)
-            .set("pool_address", &swap.pool_address)
-            .set("tx_hash", &swap.tx_hash)
-            .set("user", &swap.user)
-            .set("token_in", &swap.token_in)
-            .set("token_out", &swap.token_out)
-            .set("amount_in", swap.amount_in.to_string())
-            .set("amount_out", swap.amount_out.to_string())
-            .set("price", swap.price.to_string())
-            .set("block_number", swap.block_number);
-
-        // Update pool reserves
-        tables
-            .update_row("pool_reserves", &swap.pool_address)
-            .set("token0_reserve", swap.new_reserve0.to_string())
-            .set("token1_reserve", swap.new_reserve1.to_string())
-            .set("total_liquidity", swap.total_liquidity.to_string())
-            .set("last_swap_block", swap.block_number);
-
-        // Update volume statistics
-        let daily_key = format!("{}:{}", swap.pool_address, swap.date);
-        tables
-            .update_row("daily_pool_stats", daily_key)
-            .set("volume_usd", swap.daily_volume_usd.to_string())
-            .set("tx_count", swap.daily_tx_count)
-            .set("unique_users", swap.daily_unique_users);
-    }
-
-    // Handle liquidity provision/removal
-    for lp_event in pool_events.liquidity_events {
-        match lp_event.event_type {
-            LiquidityEventType::Add => {
-                tables
-                    .create_row("liquidity_positions", &lp_event.position_id)
-                    .set("pool_address", &lp_event.pool_address)
-                    .set("user", &lp_event.user)
-                    .set("liquidity_amount", lp_event.amount.to_string())
-                    .set("token0_amount", lp_event.token0_amount.to_string())
-                    .set("token1_amount", lp_event.token1_amount.to_string())
-                    .set("created_block", lp_event.block_number);
-            },
-            LiquidityEventType::Remove => {
-                tables
-                    .delete_row("liquidity_positions", &lp_event.position_id);
-            }
-        }
-    }
-
-    Ok(tables.to_database_changes())
-}
-```
-
-## Advanced Features
-
-### Conditional Updates
-
-```rust
-// Only update if value actually changed
-if new_balance != old_balance {
-    tables
-        .update_row("balances", &address)
-        .set("balance", new_balance.to_string())
-        .set("updated_at", block.timestamp);
-}
-
-// Conditional record creation
-if transfer.amount > DUST_THRESHOLD {
-    tables
-        .create_row("significant_transfers", transfer_id)
-        .set("from_addr", &transfer.from)
-        .set("to_addr", &transfer.to)
-        .set("amount", transfer.amount.to_string());
-}
-```
-
-### Bulk Operations
-
-```rust
-// Batch related changes together
-for (address, balance_change) in balance_changes {
-    if balance_change.new_balance == 0 {
-        // Remove zero balances
-        tables.delete_row("active_balances", &address);
-    } else {
-        tables
-            .update_row("active_balances", &address) 
-            .set("balance", balance_change.new_balance.to_string())
-            .set("last_tx", &balance_change.last_tx_hash);
-    }
-}
-```
-
-### Ordinal-based Consistency
-
-Ordinals are automatically managed by the `Tables` struct. Each call to `create_row`, `update_row`, `upsert_row`, or `delete_row` increments an internal ordinal counter, ensuring correct ordering for reorg handling. You do not need to set ordinals manually.
-
-```rust
-#[substreams::handlers::map]
-pub fn db_out(block: Block) -> Result<DatabaseChanges, Error> {
-    let mut tables = Tables::new();
-
-    for trx in block.transactions() {
-        for (log, _call) in trx.logs_with_calls() {
-            let log_id = format!("{}:{}", Hex::encode(&trx.hash), log.index);
-
-            // Ordinal is assigned automatically by Tables
-            tables
-                .create_row("all_logs", log_id)
-                .set("tx_hash", Hex::encode(&trx.hash))
-                .set("log_index", log.index)
-                .set("address", Hex::encode(&log.address))
-                .set("data", Hex::encode(&log.data));
-        }
-    }
-
-    Ok(tables.to_database_changes())
-}
-```
-
-## Schema Considerations
-
-### Primary Key Design
-
-**Good Primary Keys**:
-```rust
-// Preferred: composite PK matching schema PRIMARY KEY (col1, col2, …)
-let log_index = log_index.to_string();
 tables.create_row("transfers", [
-    ("tx_hash", tx_hash.as_str()),
+    ("tx_hash", transfer.tx_hash.as_str()),
     ("log_index", log_index.as_str()),
 ]);
 
-// Single-column PK: plain string is fine
-tables.create_row("balances", &holder_address);
-tables.update_row("token_balances", &format!("{}:{}", contract, holder));
+// ❌ no Vec impl
+tables.create_row("transfers", vec![("tx_hash", "0x..")]);
+
+// ❌ mixed &str / String in one array
+tables.create_row("transfers", [("tx_hash", "0x.."), ("log_index", log_index)]);
+
+// ❌ never concat a multi-column PK into one string
+tables.create_row("transfers", format!("{}-{}", tx_hash, log_index));
 ```
 
-**Avoid**:
+Composite key names and order **must match `schema.sql`**:
+
+| `schema.sql` | Rust key |
+|---|---|
+| `PRIMARY KEY (tx_hash, log_index)` | `[("tx_hash", ..), ("log_index", ..)]` — same names, same order |
+| `PRIMARY KEY (address)` | `address.as_str()` |
+
+Note: `tables::PrimaryKey` is distinct from the generated proto `pb::...::table_change::PrimaryKey`. Both exist; you want the `tables::` one.
+
+## Delta updates
+
+**PostgreSQL only**, sink **>= v4.12.0**, crate **>= 4.0.0** (these methods do not exist in 3.x).
+
+Push aggregation into the database instead of maintaining store modules:
+
 ```rust
-// Don't use auto-incrementing IDs - not reorg safe
-tables.create_row("transfers", "AUTO_INCREMENT")  // BAD
-
-// Don't use non-deterministic keys  
-tables.create_row("events", uuid::new())          // BAD
-
-// Don't string-concat when schema has multi-column PRIMARY KEY
-// (PK mismatch → silent wrong rows or setup/run failures)
-tables.create_row("transfers", format!("{}:{}", tx_hash, log_index))  // BAD if PK is (tx_hash, log_index)
+tables.upsert_row("daily_volume", [
+        ("day", day.as_str()),
+        ("token", token.as_str()),
+    ])
+    .set_if_null("first_seen", &timestamp)   // COALESCE(col, value) — first write wins
+    .set("last_seen", &timestamp)            // col = value
+    .max("high", price)                      // GREATEST(col, value)
+    .min("low", price)                       // LEAST(col, value)
+    .add("volume", amount.as_str())          // COALESCE(col, 0) + value
+    .add("trades", 1i64)
+    .sub("outflow", withdrawn.as_str());     // COALESCE(col, 0) - value
 ```
 
-### Field Types and Validation
+### Trait bounds — the main source of compile errors
+
+| Trait | Implemented for | **Not** implemented for |
+|---|---|---|
+| `NumericAddable` (`add`, `sub`) | `String`, `&str`, integers, `isize`/`usize`, `BigDecimal`, `&BigDecimal`, `BigInt`, `&BigInt` | **`&String`** |
+| `NumericComparable` (`max`, `min`) | integers, `isize`/`usize`, `BigDecimal`, `&BigDecimal`, `BigInt`, `&BigInt` | **`String`, `&str`** |
 
 ```rust
-// Proper type handling — all values go through the set() method
-// which accepts any type implementing ToDatabaseValue
-tables
-    .create_row("transactions", &tx_hash)
-    .set("hash", &tx_hash)                    // String
-    .set("block_number", tx.block_number)     // i64
-    .set("gas_used", tx.gas_used.to_string()) // BigInt as string
-    .set("success", tx.status == 1)           // Boolean
-    .set("timestamp", tx.timestamp)           // Unix timestamp
-    .set("input_data", Hex::encode(&tx.input)); // Binary as hex string
+.add("volume", &amount)          // ❌ &String: no NumericAddable impl
+.add("volume", amount.as_str())  // ✅ preferred — zero-alloc
+.add("volume", amount.clone())   // ✅ compiles, needless allocation
+.max("high", price_str)          // ❌ String has no NumericComparable impl
+.max("high", &price_bigdecimal)  // ✅
 ```
 
-### Handling NULL Values
+### Runtime panics
 
-```rust
-// Optional fields — set() is called on a Row, not on Tables directly
-let row = tables.create_row("contracts", &contract_id);
+- `add`/`sub` parse string values with `BigDecimal::from_str` → **panic on non-numeric input**
+  (`"add/sub() requires a valid numeric value, got: ..."`). Validate upstream.
+- Mixing incompatible operations on the same column in one row (e.g. `max` then `add`) **panics**.
 
-if let Some(name) = contract_name {
-    row.set("name", name);
-} else {
-    row.set("name", ""); // Empty string as fallback
-}
+## schema.sql
 
-// For optional numeric fields, use set_if_null with delta updates
-tables
-    .upsert_row("stats", &key)
-    .set_if_null("first_value", &value)  // Only set if column is NULL
-    .set("latest_value", &value);
+Applied by `substreams-sink-sql setup`. Keep it minimal — it must tolerate real chain data and the sink's batched, per-table flush order.
+
+```sql
+CREATE TABLE IF NOT EXISTS transfers (
+    tx_hash     VARCHAR(66)   NOT NULL,
+    log_index   INTEGER       NOT NULL,
+    from_addr   VARCHAR(42)   NOT NULL,
+    to_addr     VARCHAR(42)   NOT NULL,
+    amount      NUMERIC(78,0) NOT NULL,   -- NOT BIGINT: uint256 overflows
+    block_num   BIGINT        NOT NULL,
+    PRIMARY KEY (tx_hash, log_index)      -- must match create_row's key array
+);
+
+CREATE INDEX idx_transfers_from ON transfers(from_addr);
 ```
 
-## Error Handling
+**Do not:**
 
-### Graceful Degradation
+- `CHECK (amount > 0)` / `CHECK (from_addr != to_addr)` — zero-value and self-transfers are legal
+  on-chain; the first one aborts the batch.
+- `SERIAL` / `gen_random_uuid()` primary keys — replays must be deterministic, and the module
+  supplies the key.
+- Cross-table `FOREIGN KEY`s — the sink flushes per table and does not guarantee parents land
+  before children.
+- Row triggers that increment aggregates — reorg DELETEs never decrement them. Use delta updates.
 
-```rust
-#[substreams::handlers::map]
-pub fn db_out(events: Events) -> Result<DatabaseChanges, Error> {
-    let mut tables = Tables::new();
-    let mut errors = Vec::new();
+`setup` also creates the **`cursors`** table (`--cursors-table` to rename). Cursor resume is automatic; never hand-roll a last-block-processed store in the module.
 
-    for transfer in events.transfers {
-        match process_transfer(&transfer) {
-            Ok(transfer_data) => {
-                tables
-                    .create_row("transfers", &transfer_data.id)
-                    .set("tx_hash", &transfer_data.tx_hash)
-                    .set("amount", &transfer_data.amount);
-            },
-            Err(e) => {
-                errors.push(format!("Transfer {}: {}", transfer.tx_hash, e));
-                
-                // Create error record for debugging
-                tables
-                    .create_row("processing_errors", &transfer.tx_hash)
-                    .set("error_type", "transfer_processing")
-                    .set("error_message", &e.to_string())
-                    .set("block_number", transfer.block_number)
-                    .set("raw_data", &format!("{:?}", transfer));
-            }
-        }
-    }
+## Operations on the wire
 
-    if !errors.is_empty() {
-        substreams::log::warn!("Processed with {} errors: {:?}", errors.len(), errors);
-    }
+The proto `Operation` enum is `UNSET` / `CREATE` / `UPDATE` / `DELETE`. **There is no `Operation::Upsert`** — `upsert_row()` is a `Tables`-level helper, not a wire operation.
 
-    Ok(tables.to_database_changes())
-}
-```
-
-### Data Validation
+## Testing
 
 ```rust
-fn validate_transfer(transfer: &Transfer) -> Result<(), String> {
-    if transfer.amount == BigInt::zero() {
-        return Err("Zero amount transfer".to_string());
-    }
-    
-    if transfer.from == transfer.to {
-        return Err("Self-transfer detected".to_string());  
-    }
-    
-    if transfer.from.len() != 42 || transfer.to.len() != 42 {
-        return Err("Invalid address format".to_string());
-    }
-    
-    Ok(())
+use substreams_database_change::pb::sf::substreams::sink::database::v1::Operation;
+
+#[test]
+fn emits_transfer_row() {
+    let changes = db_out(test_events()).unwrap();
+    let change = changes.table_changes.iter().find(|c| c.table == "transfers").unwrap();
+
+    // `operation` is a prost i32 — compare against the enum discriminant
+    assert_eq!(change.operation, Operation::Create as i32);
 }
 ```
 
-## Performance Optimization
+The primary key is a `oneof` — `primary_key: Option<table_change::PrimaryKey>` — so match the variant rather than reaching for a `pk` field (there isn't one).
 
-### Batching Strategies
-
-```rust
-// Group related changes
-let mut balance_updates = HashMap::new();
-let mut new_transfers = Vec::new();
-
-// Collect all changes first
-for event in events {
-    match event {
-        Event::Transfer(t) => {
-            new_transfers.push(t);
-            balance_updates.entry(t.from).or_insert(Vec::new()).push(t.clone());
-            balance_updates.entry(t.to).or_insert(Vec::new()).push(t.clone());
-        }
-    }
-}
-
-// Apply in batches
-for transfer in new_transfers {
-    tables.create_row("transfers", &transfer.id)
-        .set("from_addr", &transfer.from)
-        .set("to_addr", &transfer.to)
-        .set("amount", &transfer.amount);
-}
-
-for (address, transfers) in balance_updates {
-    let final_balance = calculate_final_balance(&transfers);
-    tables.update_row("balances", &address).set("balance", final_balance);
-}
-```
-
-### Memory Efficiency
-
-```rust
-// Process transactions efficiently — Tables handles batching internally.
-// Use references to avoid cloning large structures.
-for trx in block.transactions() {
-    for (log, _call) in trx.logs_with_calls() {
-        if is_relevant_event(log) {
-            // Only extract the fields you need
-            tables
-                .create_row("events", format!("{}:{}", Hex::encode(&trx.hash), log.index))
-                .set("tx_hash", Hex::encode(&trx.hash))
-                .set("address", Hex::encode(&log.address));
-        }
-    }
-}
-```
-
-## Testing CDC Implementation
-
-### Unit Tests
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_transfer_processing() {
-        let transfer = create_test_transfer();
-        let result = process_transfer_to_cdc(&transfer).unwrap();
-        
-        assert_eq!(result.table_changes.len(), 3); // transfer + 2 balance updates
-        
-        let transfer_change = &result.table_changes[0];
-        assert_eq!(transfer_change.table, "erc20_transfers");
-        assert_eq!(transfer_change.operation, Operation::Create);
-        assert_eq!(transfer_change.fields.len(), 7);
-    }
-
-    #[test] 
-    fn test_balance_update_deduplication() {
-        let transfers = vec![
-            create_transfer("0xAAA", "0xBBB", 100),
-            create_transfer("0xAAA", "0xCCC", 200), // Same sender
-        ];
-        
-        let result = process_transfers_to_cdc(&transfers).unwrap();
-        
-        // Should only have one balance update for 0xAAA (sender)
-        let balance_updates: Vec<_> = result.table_changes.iter()
-            .filter(|c| c.table == "balances" && c.pk.contains("0xAAA"))
-            .collect();
-            
-        assert_eq!(balance_updates.len(), 1);
-    }
-}
-```
-
-### Integration Testing
+Verify rows land end to end (short ranges need a small flush interval; the default is 1000 blocks):
 
 ```bash
-# Test with small block range
-substreams run -s 18000000 -t +100 db_out
-
-# Validate database state
-psql $DSN -c "SELECT COUNT(*) FROM erc20_transfers WHERE block_number BETWEEN 18000000 AND 18000100;"
-
-# Test reorg handling
-substreams run -s 18000000 -t +100 db_out --production-mode=false
-# Check that duplicate processing produces identical results
+substreams-sink-sql run "$DSN" ./pkg.spkg 18000000:+100 --batch-block-flush-interval=1
+psql "postgresql://user:pass@localhost:5432/db" -c "SELECT COUNT(*) FROM transfers;"
 ```
 
-## Best Practices
-
-### DO
-
-✅ **Use deterministic primary keys**
-✅ **Handle reorgs with ordinals**
-✅ **Validate data before creating changes**
-✅ **Batch related operations**
-✅ **Log processing errors gracefully**
-✅ **Test with small block ranges first**
-
-### DON'T
-
-❌ **Use auto-incrementing primary keys**
-❌ **Ignore ordinal ordering**
-❌ **Create changes for invalid data**
-❌ **Process each event in isolation**
-❌ **Panic on data errors**
-❌ **Skip integration testing**
-
-### Performance Tips
-
-1. **Minimize change operations**: Batch updates where possible
-2. **Use specific primary keys**: Avoid overly long composite keys
-3. **Validate early**: Check data before creating table changes
-4. **Handle errors gracefully**: Don't fail entire blocks for single bad records
-5. **Monitor change volume**: Track operations per block for performance tuning
+> The `psql` CLI needs `postgresql://`; the sink needs `psql://` or `postgres://` and **rejects**
+> `postgresql://`. The two tools take different schemes for the same database — keep both handy.

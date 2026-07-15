@@ -1,8 +1,9 @@
 # T2.2 — Uniswap V2 Swaps + Token Metadata (Ethereum)
 
-**Skill exercised:** `substreams-dev`
+**Skill exercised:** `substreams-dev` (+ `substreams-ethereum` patterns)
 **Model:** claude-sonnet-4-6
 **Result:** Build OK · Run OK · Correctness 96% · 2 trials, both 6/6
+**Note:** Token metadata RPC uses `RpcBatch` (batched `token0`/`token1` + `symbol`/`decimals`).
 
 ## Goal
 

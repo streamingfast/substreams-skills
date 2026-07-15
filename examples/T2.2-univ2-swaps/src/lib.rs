@@ -16,6 +16,7 @@ use substreams::store::{
 };
 use substreams::Hex;
 use substreams_ethereum::pb::eth::v2 as eth;
+use substreams_ethereum::rpc::RpcBatch;
 use substreams_ethereum::Event;
 
 use pb::uniswap::v2::{PoolEvents, PoolSwapEvent, Swap, Swaps};
@@ -70,11 +71,14 @@ pub fn map_pool_events(block: eth::Block) -> Result<PoolEvents, Error> {
 
 // ── Module 2: store_pool_tokens ────────────────────────────────────────────────
 // For every pool address seen in PoolEvents, fetch token0/token1 metadata via
-// eth_call and cache as JSON under "pool:{address}".
+// batched eth_call (RpcBatch) and cache as JSON under "pool:{address}".
 //
 // updatePolicy: set_if_not_exists means the store runtime skips the write if
 // the key already exists — so each pool's metadata is fetched exactly once
 // across all blocks, never again.
+//
+// Prefer the T3.1 layout (map fetch → store cache → map consume) for new code;
+// this example keeps RPC in the store handler for a smaller module graph.
 #[substreams::handlers::store]
 pub fn store_pool_tokens(events: PoolEvents, store: StoreSetIfNotExistsString) {
     for event in &events.events {
@@ -85,23 +89,49 @@ pub fn store_pool_tokens(events: PoolEvents, store: StoreSetIfNotExistsString) {
             Err(_) => continue,
         };
 
-        // eth_call token0() and token1() on the pair contract
-        let token0_fn = abi::uniswap_v2_pair::functions::Token0 {};
-        let token0_addr = match token0_fn.call(pool_bytes.clone()) {
-            Some(a) => a,
-            None => continue,
-        };
-        let token1_fn = abi::uniswap_v2_pair::functions::Token1 {};
-        let token1_addr = match token1_fn.call(pool_bytes) {
-            Some(a) => a,
-            None => continue,
+        // Batch token0() + token1() on the pair (never one execute() per field)
+        let pair_rpc = RpcBatch::new()
+            .add(
+                abi::uniswap_v2_pair::functions::Token0 {},
+                pool_bytes.clone(),
+            )
+            .add(abi::uniswap_v2_pair::functions::Token1 {}, pool_bytes)
+            .execute();
+
+        let (token0_addr, token1_addr) = match pair_rpc {
+            Ok(resp) => {
+                let t0 = RpcBatch::decode::<_, abi::uniswap_v2_pair::functions::Token0>(
+                    &resp.responses[0],
+                );
+                let t1 = RpcBatch::decode::<_, abi::uniswap_v2_pair::functions::Token1>(
+                    &resp.responses[1],
+                );
+                match (t0, t1) {
+                    (Some(a), Some(b)) => (a, b),
+                    _ => continue,
+                }
+            }
+            Err(_) => continue,
         };
 
-        // Fetch ERC-20 metadata for each token
-        let sym0 = fetch_symbol(&token0_addr);
-        let dec0 = fetch_decimals(&token0_addr);
-        let sym1 = fetch_symbol(&token1_addr);
-        let dec1 = fetch_decimals(&token1_addr);
+        // Batch symbol + decimals for both tokens (4 calls, one round-trip)
+        let meta_rpc = RpcBatch::new()
+            .add(abi::erc20::functions::Symbol {}, token0_addr.clone())
+            .add(abi::erc20::functions::Decimals {}, token0_addr.clone())
+            .add(abi::erc20::functions::Symbol {}, token1_addr.clone())
+            .add(abi::erc20::functions::Decimals {}, token1_addr.clone())
+            .execute();
+
+        let (sym0, dec0, sym1, dec1) = match meta_rpc {
+            Ok(resp) => {
+                let s0 = symbol_from_response(&resp.responses[0], &token0_addr);
+                let d0 = decimals_from_response(&resp.responses[1]);
+                let s1 = symbol_from_response(&resp.responses[2], &token1_addr);
+                let d1 = decimals_from_response(&resp.responses[3]);
+                (s0, d0, s1, d1)
+            }
+            Err(_) => continue,
+        };
 
         let t0_hex = Hex::encode(&token0_addr);
         let t1_hex = Hex::encode(&token1_addr);
@@ -117,34 +147,33 @@ pub fn store_pool_tokens(events: PoolEvents, store: StoreSetIfNotExistsString) {
     }
 }
 
-/// Attempt to decode an ERC-20 symbol via ABI call.
-/// Some legacy tokens (MKR etc.) return bytes32 — if the ABI string decode
-/// fails (call returns None), fall back to the hex token address as identifier.
-fn fetch_symbol(token_addr: &[u8]) -> String {
-    let sym_fn = abi::erc20::functions::Symbol {};
-    match sym_fn.call(token_addr.to_vec()) {
+fn normalize_symbol(s: String) -> String {
+    s.trim_end_matches('\0').trim().to_string()
+}
+
+/// Decode ERC-20 symbol from a batch response. On decode failure (e.g. bytes32
+/// symbol like MKR) or empty string, fall back to the 0x-prefixed token address.
+fn symbol_from_response(
+    response: &substreams_ethereum::pb::eth::rpc::RpcResponse,
+    token_addr: &[u8],
+) -> String {
+    match RpcBatch::decode::<_, abi::erc20::functions::Symbol>(response) {
         Some(s) => {
-            let trimmed = s.trim_end_matches('\0').trim().to_string();
+            let trimmed = normalize_symbol(s);
             if trimmed.is_empty() {
-                // Empty string returned — use address as fallback
                 format!("0x{}", Hex::encode(token_addr))
             } else {
                 trimmed
             }
         }
-        None => {
-            // ABI decode failed (bytes32 return or revert) — use address
-            format!("0x{}", Hex::encode(token_addr))
-        }
+        None => format!("0x{}", Hex::encode(token_addr)),
     }
 }
 
-fn fetch_decimals(token_addr: &[u8]) -> u32 {
-    let dec_fn = abi::erc20::functions::Decimals {};
-    match dec_fn.call(token_addr.to_vec()) {
-        Some(d) => d.to_string().parse::<u32>().unwrap_or(18),
-        None => 18,
-    }
+fn decimals_from_response(response: &substreams_ethereum::pb::eth::rpc::RpcResponse) -> u32 {
+    RpcBatch::decode::<_, abi::erc20::functions::Decimals>(response)
+        .map(|d| d.to_string().parse::<u32>().unwrap_or(18))
+        .unwrap_or(18)
 }
 
 // ── Module 3: map_swaps ────────────────────────────────────────────────────────

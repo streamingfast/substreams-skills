@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.5.1
+  version: 1.5.2
   author: StreamingFast
   documentation: https://docs.substreams.dev
 ---
@@ -43,9 +43,10 @@ all of which are **public** (no auth header needed).
 | `BASE_URL` | `https://admin.streamingfast.io` | User says "local"/"localhost" → `http://localhost:9000`. Other host → use as-is. |
 
 All three endpoints are `POST` of a JSON body to `{BASE_URL}/sf.portalapi.v1.PortalApi/<Method>`.
-Prefer **snake_case** in request bodies. **Responses may use camelCase** — parse both.
-Enum values are full strings (e.g. `"DEVICE_TOKEN_STATUS_APPROVED"`). Call with the
-Bash tool + `curl`, pipe through `jq`.
+Requests accept either casing (prefer **snake_case**); **responses are camelCase**.
+`int64` fields (`expiresIn`, `interval`) come back as **JSON strings** — coerce before
+doing math on them. Enum values are full strings (e.g. `"DEVICE_TOKEN_STATUS_APPROVED"`).
+Call with the Bash tool + `curl`, pipe through `jq`.
 
 ## Step 1 — Start the login
 
@@ -55,25 +56,25 @@ curl -sS -X POST "$BASE_URL/sf.portalapi.v1.PortalApi/DeviceAuthorize" \
   -d '{"client_name": "Claude agent"}'
 ```
 
-Response (wire JSON may be **snake_case or camelCase** — parse both):
+Response — production sends **camelCase only**, and the `int64` fields
+(`expiresIn`, `interval`) arrive as **JSON strings**, not numbers:
 
 ```json
 {
-  "device_code": "device_9f8c…",
   "deviceCode": "device_9f8c…",
-  "user_code": "BCDF-GH2J",
   "userCode": "BCDF-GH2J",
-  "verification_uri": "https://thegraph.market/device",
   "verificationUri": "https://thegraph.market/device",
-  "verification_uri_complete": "https://thegraph.market/device?user_code=BCDF-GH2J",
   "verificationUriComplete": "https://thegraph.market/device?user_code=BCDF-GH2J",
-  "expires_in": 600,
   "expiresIn": "600",
-  "interval": 5
+  "interval": "5"
 }
 ```
 
-Keep `device_code` / `deviceCode`, `interval`, and `expires_in` / `expiresIn` in memory.
+Read camelCase, but tolerate snake_case (`device_code`, `expires_in`, …) in case a
+deployment emits it. Coerce `expiresIn` / `interval` with `Number(...)` / `int(...)`
+before any arithmetic or comparison — they are strings on the wire.
+
+Keep `deviceCode`, `interval`, and `expiresIn` in memory.
 **Do not print the `device_code`** — it is the agent's secret half of the handshake.
 Use `verification_uri_complete` (or camelCase) as returned; production often points at
 **thegraph.market**, not only admin.streamingfast.io.
@@ -140,15 +141,15 @@ curl -sS -X POST "$BASE_URL/sf.portalapi.v1.PortalApi/DeviceToken" \
 | `DEVICE_TOKEN_STATUS_EXPIRED` | Handshake timed out | Stop; restart at Step 1 |
 | `DEVICE_TOKEN_STATUS_APPROVED` | Done | Capture the tokens (below) |
 
-On `APPROVED` (fields may be camelCase: `accessToken`, `refreshToken`, `organizationId`, `expiresIn`):
+On `APPROVED` (camelCase on the wire; `expiresIn` is an `int64` → **JSON string**):
 
 ```json
 {
   "status": "DEVICE_TOKEN_STATUS_APPROVED",
-  "access_token": "eyJ…",
-  "refresh_token": "agentrt_…",
-  "expires_in": 900,
-  "organization_id": "0cyje0…"
+  "accessToken": "eyJ…",
+  "refreshToken": "agentrt_…",
+  "expiresIn": "900",
+  "organizationId": "0cyje0…"
 }
 ```
 
@@ -200,9 +201,9 @@ Response — a **new** access token **and a new refresh token**:
 
 ```json
 {
-  "access_token": "eyJ…",
-  "refresh_token": "agentrt_…NEW",
-  "expires_in": 900
+  "accessToken": "eyJ…",
+  "refreshToken": "agentrt_…NEW",
+  "expiresIn": "900"
 }
 ```
 

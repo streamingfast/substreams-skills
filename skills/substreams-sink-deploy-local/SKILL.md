@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 2.1.0
+  version: 2.2.0
   author: StreamingFast
   documentation: https://docs.substreams.dev/how-to-guides/sinks
 ---
@@ -80,7 +80,7 @@ Where does the data need to land?
 | `substreams-sink-sql` (CDC) | `proto:sf.substreams.sink.database.v1.DatabaseChanges`     |
 | `substreams-sink-sql` (from-proto) | your annotated domain proto (insert-only)           |
 | `substreams-sink-pubsub`    | `proto:sf.substreams.sink.pubsub.v1.Publish`               |
-| `substreams-sink-files`     | any user-defined proto (streams repeated fields as rows)   |
+| `substreams-sink-files`     | depends on `--encoder` — see Files section (`lines` requires `sf.substreams.sink.files.v1.Lines`) |
 | `substreams sink webhook`   | any (delivered as JSON)                                    |
 | Subgraph (graph-node)       | `proto:sf.substreams.sink.entity.v1.EntityChanges`         |
 | `substreams sink protojson` | any (proto-as-JSON lines)                                  |
@@ -149,6 +149,8 @@ clickhouse://default:pass@host:9000/dbname
 Optional Postgres isolation: `?schemaName=ethereum` (sink-specific; multi-pipeline on one DB).
 
 > **Note:** Parquet/CSV lake output is **not** a SQL DSN — use `substreams-sink-files` or `substreams sink protojson`.
+>
+> An invalid scheme errors with `allowed schemes: [psql,postgres,clickhouse,parquet]`. **Ignore the `parquet` entry** — it is an unimplemented leftover, not a sink target. Passing `parquet://` gets past DSN validation and then panics in `from-proto` / fails driver lookup in `run`.
 
 ### Setup → Run (Database Changes / Postgres)
 
@@ -221,24 +223,38 @@ brew install streamingfast/tap/substreams-sink-files
 # or release binary from GitHub
 ```
 
-### Output proto: any
+### Output proto: depends on the encoder
 
-The sink walks top-level `repeated` fields and emits one CSV/Parquet row per entry.
+There is **no `csv` or `jsonl` encoder.** The three real encoders (`--encoder`, default `parquet`):
+
+| Encoder | Output module must be | Produces |
+|---------|-----------------------|----------|
+| `parquet` (default) | any protobuf message (parquet column options honored) | Parquet |
+| `lines` | **`sf.substreams.sink.files.v1.Lines`** (list of strings) | any line format — JSONL, CSV, TSV |
+| `protojson:.<field>[]` | any protobuf message | JSONL, one row per repeated entry |
+
+CSV comes from the `lines` encoder with the **module** emitting CSV lines — not from a CSV encoder. The `protojson:` expression supports only the single form `.<repeated_field_name>[]`.
 
 ### Run (typical)
 
+Signature: `substreams-sink-files run <manifest> [<module>] [<output>] [flags]` — the endpoint is the `-e` **flag**, and the block range is `-s`/`-t`, **not** positional args.
+
 ```bash
 substreams-sink-files run \
-    "$ENDPOINT" \
     ./my-substreams.spkg \
     map_transfers \
-    s3://my-bucket/transfers/ \
-    "12000000:+1000000" \
+    -o s3://my-bucket/transfers/ \
+    -e "$ENDPOINT" \
+    -s 12000000 -t +1000000 \
     --encoder=parquet \
-    --buffer-max-size=200000
+    --file-block-count=10000
 ```
 
-Encoders: `parquet` (warehouses), `csv`, `jsonl`. Storage: `s3://`, `gs://`, `file:///abs/path`. Cursor: `_cursor.json` next to output (survives restarts if the URL is stable).
+Storage (`-o`, default `./output`): `s3://`, `gs://`, `file://`, local paths.
+
+Cursor: `--state-store`, default **`./state.yaml`** — a local path by default, *not* written next to `-o`. Persist it or restarts resume from `-s`.
+
+File sizing is `-c/--file-block-count` (default 10000 blocks per file). `--buffer-max-size` is the writer's **memory budget in bytes** (default 67108864 = 64 MiB) — raise it toward available RAM for throughput; lowering it hurts.
 
 Verify flags with `substreams-sink-files run --help` if the installed version differs.
 
@@ -329,7 +345,7 @@ Module output must match the sink table above. For SQL CDC use `DatabaseChanges`
 
 ### 3. Long-running container restarts at block 0
 
-Cursor not persisted. SQL: lives in DB. Files: `_cursor.json` at destination. Webhook: `./state.cursor`. Protojson: `./state.yaml` (defaults). Mount volumes accordingly.
+Cursor not persisted. SQL: lives in DB. Files: `./state.yaml` (`--state-store`). Webhook: `./state.cursor` (`--state-file`). Protojson: `./state.yaml` (`--state-file`). Every non-SQL default is a **local relative path** — in a container it dies with the container. Mount volumes or point the flag at durable storage.
 
 ### 4. ClickHouse / buffered path sees no rows for ~N blocks
 
@@ -373,7 +389,9 @@ Service account needs `pubsub.publisher`. Check ADC / `GOOGLE_APPLICATION_CREDEN
 
 - **No** `substreams-sink-sql generate` — write `schema.sql` yourself.
 - **No** `substreams-sink-sql undo` — use `tools cursor delete`.
-- **No** `--workers` on `substreams-sink-sql run` — do not invent parallel-worker flags; use sequential backfill ranges or provider-side parallelization headers only if documented.
+- **No** `--workers` on `substreams-sink-sql run` — do not invent parallel-worker flags. For provider-side parallelism the real knob is the header `-H X-Substreams-Parallel-Workers=<n>` (the only other valid header is `X-substreams-acknowledge-non-deterministic`); otherwise use sequential backfill ranges.
+- **No** `csv` / `jsonl` encoder on `substreams-sink-files` — only `parquet`, `lines`, `protojson:.<field>[]`.
+- **No** `parquet://` sink target. `parquet` appears in the sink-sql DSN parser's allowed scheme list, but nothing implements it — `from-proto` panics on it and `run`/`setup` fail at driver lookup. Use `substreams-sink-files --encoder=parquet`.
 
 ---
 

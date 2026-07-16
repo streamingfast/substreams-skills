@@ -56,13 +56,13 @@ accounts.iter().any(|a| *a == TRACKED)                    // a: &Address   → `
 ### Wrong — compiled message instructions only
 
 ```rust
-// ❌ Misses CPI / inner instructions — often 90%+ of protocol activity
+// ❌ Misses CPI / inner instructions — often most of protocol activity
 for instr in message.instructions.iter() {
     // program_id_index + account_keys dance — do not do this for protocol detection
 }
 ```
 
-Eval note (T5.3 Raydium CLMM): top-level-only iteration found a small fraction of swaps; `walk_instructions()` found all.
+Eval note (T5.3 Raydium CLMM): top-level-only iteration found **~10%** of swaps; `walk_instructions()` found all.
 
 There is essentially never a reason to hand-resolve `program_id_index` against `account_keys` for matching a program’s activity.
 
@@ -122,6 +122,8 @@ For reusable packages, optional module `params` can carry a base58 program or ac
 ## Index modules (block skip keys)
 
 When scanning large slot ranges, emit an **index** so the runtime can skip empty blocks.
+
+**Status:** conventional `blockIndex` + `Keys` pattern (same shape as `substreams-dev` / EVM). The snippets below are **not** built as a standalone example crate in this repo — treat them as patterns to adapt, not as copy-paste-verified packages. The `index_from_block` path was type-checked against `substreams` 0.7 + `substreams-solana` 0.15 (`Address` is owned; no `Deref`).
 
 ```rust
 use substreams::pb::sf::substreams::index::v1::Keys;

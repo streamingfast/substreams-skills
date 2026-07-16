@@ -11,7 +11,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.4.3
+  version: 1.4.4
   author: StreamingFast
   documentation: https://docs.substreams.dev/how-to-guides/develop-your-own-substreams/solana
 ---
@@ -190,7 +190,7 @@ Deep dive: [references/instruction-parsing.md](./references/instruction-parsing.
 From program ID(s) + account address(es):
 
 1. **In-module filter** — `if ix.program_id() != PROGRAM { continue; }` and optional account membership checks.
-2. **Index module** (recommended when scanning large ranges) — emit keys like `program:<base58>`, `account:<base58>`, `ix:<name>` so consumers can skip empty slots.
+2. **Index module** (recommended when scanning large ranges) — emit keys like `program:<base58>`, `account:<base58>`, `ix:<name>` so consumers can skip empty slots. Pattern-conventional (not a built example crate here); see [loops-and-filters](./references/loops-and-filters.md).
 3. **Foundational packages** — for “transactions touching program/account X” scaffolding, `substreams init` → **sol-transactions** uses cached [solana-common](https://substreams.dev/streamingfast/solana-common) filters (no voting noise when delayed from head). Still implement domain decoding in your map.
 
 Details: [references/loops-and-filters.md](./references/loops-and-filters.md).
@@ -229,11 +229,43 @@ strip = "debuginfo"
 
 **Keep the pair matched.** `substreams-solana` declares the `substreams` version it was built against (`0.15` → `substreams ^0.7`; `0.14.3` → `^0.6`). Pin the row above rather than mixing majors.
 
-Mixing (`0.6` + `0.15`, or `0.7` + `0.14`) does **not** fail the build — cargo silently resolves **two** copies of `substreams` into the tree and compiles anyway. A green build is therefore *not* evidence your versions are right; check `cargo tree | grep substreams` and expect exactly one version.
+**Mix-major scenarios (do not treat as “always link-error”):**
+
+| What you mixed | What actually happens |
+|---|---|
+| `substreams 0.6` + `substreams-solana 0.15`, or `0.7` + `0.14` | Cargo still **builds** — it silently pulls **two** `substreams` copies into the tree. A green build is *not* proof the pins are right; `cargo tree \| grep substreams` should show **one** version. |
+| `prost` 0.13 vs 0.14, or `substreams-database-change` 4 on a `substreams 0.6` tree | Often real **link / type** failures — clean with `rm -rf target && substreams build` after realigning. |
 
 Re-check [crates.io/crates/substreams-solana](https://crates.io/crates/substreams-solana) before assuming these pins forever.
 
 No `abi/` or `substreams-ethereum-abigen` for Solana projects.
+
+## build.rs + protobuf modules (required for packable maps)
+
+Solana packages **do** use `build.rs` — for `prost_build` of your output protos (not ABI codegen). Every Solana example in this repo has one.
+
+```rust
+// build.rs
+fn main() {
+    prost_build::compile_protos(&["proto/mypackage/v1/events.proto"], &["proto/"]).unwrap();
+}
+```
+
+Include generated code in `src/lib.rs` (package path must match `package` in the `.proto`):
+
+```rust
+// src/lib.rs — mirror the proto package path
+mod pb {
+    pub mod mypackage {
+        pub mod v1 {
+            include!(concat!(env!("OUT_DIR"), "/mypackage.v1.rs"));
+        }
+    }
+}
+use pb::mypackage::v1::{MyEvent, MyEvents};
+```
+
+`src/pb/` from `substreams protogen` is a different path — for domain output protos, prefer `build.rs` + `OUT_DIR` include as above (T5.x pattern). Cross-cutting layout notes: **`substreams-dev`**.
 
 ## Manifest
 
@@ -246,6 +278,19 @@ package:
   description: What this Solana substreams indexes
   # do not add package.doc — write README.md beside the manifest instead
 network: solana
+
+protobuf:                      # REQUIRED — pack fails without these sections
+  files:
+    - mypackage/v1/events.proto
+  importPaths:
+    - ./proto
+
+binaries:                      # REQUIRED — pack fails without these sections
+  default:
+    type: wasm/rust-v1
+    # filename = Cargo.toml [package] name with hyphens → underscores
+    file: ./target/wasm32-unknown-unknown/release/my_solana_substreams.wasm
+
 modules:
   - name: map_my_module
     kind: map
@@ -253,24 +298,34 @@ modules:
     inputs:
       - source: sf.solana.type.v1.Block
     output:
-      type: proto:mypackage.v1.MyOutput
+      type: proto:mypackage.v1.MyEvents
 ```
+
+`protobuf:` and `binaries:` are **not optional** — every working Solana example in this repo carries both; a manifest without them does not pack. Manifest field rationale (version prefix, `url`/`description`, no `package.doc`): **`substreams-dev`**.
+
+`sf.solana.type.v1.Block` is a **well-known source** — no `imports:` entry is needed for the block type.
 
 ## Canonical loop: transactions + instructions
 
 ### Successful txs + all instructions (including CPI) — default for protocols
+
+Illustrative skeleton (types `MyEvent` / `MyEvents` stand in for your generated protos). Push **typed** messages after decode — not comments alone.
 
 ```rust
 use substreams::errors::Error;
 use substreams_solana::b58;
 use substreams_solana::pb::sf::solana::r#type::v1::Block;
 
+// mod pb { … include!(…) }  // see build.rs section above
+// use pb::mypackage::v1::{MyEvent, MyEvents};
+
 const PROGRAM: [u8; 32] = b58!("YourProgramIdBase58........");
+const SWAP_DISC: [u8; 8] = [/* from IDL or sha256("global:swap")[0..8] */];
 
 #[substreams::handlers::map]
 fn map_events(block: Block) -> Result<MyEvents, Error> {
     let slot = block.slot;
-    let mut out = Vec::new();
+    let mut items: Vec<MyEvent> = Vec::new();
 
     // Successful transactions only
     for trx in block.transactions() {
@@ -285,16 +340,23 @@ fn map_events(block: Block) -> Result<MyEvents, Error> {
             let data = ix.data();
             let accounts = ix.accounts(); // Vec<Address>, Display = base58
 
-            // 1) Match discriminator for a user-selected instruction
-            // 2) MUST decode data[disc..] into typed fields (not JSON, not raw bytes)
-            // 3) MUST map accounts[i] to named fields from IDL / Accounts struct
-            // 4) Optional: filter if tracked account is not in `accounts`
-            // 5) Push a structured proto message (see Hard rule above)
-            let _ = (slot, sig, data, accounts);
+            if data.len() < 16 || data[..8] != SWAP_DISC {
+                continue;
+            }
+            // Decode args + named accounts into a structured proto (Hard rule)
+            let amount = u64::from_le_bytes(data[8..16].try_into().unwrap());
+            // accounts[N] from IDL / Accounts struct — do not invent indexes
+            items.push(MyEvent {
+                slot,
+                signature: sig.clone(),
+                amount: amount.to_string(),
+                // pool: accounts[N].to_string(),
+            });
+            let _ = accounts;
         }
     }
 
-    Ok(MyEvents { items: out })
+    Ok(MyEvents { items })
 }
 ```
 
@@ -303,13 +365,12 @@ fn map_events(block: Block) -> Result<MyEvents, Error> {
 | Rule | Why |
 |---|---|
 | **Always prefer `trx.walk_instructions()`** | Yields top-level **and** inner CPI instructions. Aggregator-routed DEX activity is almost always inner. |
-| **Never use only `message.instructions`** | Top-level only. Eval impact: ~10% of Raydium CLMM swaps found vs 100% with `walk_instructions`. |
+| **Never use only `message.instructions`** | Top-level only. T5.3 Raydium CLMM eval: ~10% of swaps found vs 100% with `walk_instructions`. |
 | **`block.transactions()` = successful only** | Failed txs skipped. Good for protocol events. |
 | **Need failed txs / full counts?** | Iterate `&block.transactions` and check `meta.err` (stats pattern). |
 | **Filter program ID first** | Cheapest reject before parsing data. |
 | **Do not invent account indexes** | Take from IDL account metas or `#[derive(Accounts)]` field order (0-based). |
-| **Decode ix data → structured objects** | Typed proto fields for args + named accounts. **No** raw data / hex / JSON string payloads. |
-| **One proto message per instruction** | `Swap`, `Deposit`, … — never a single generic event for all ix types. |
+| **Structured decode + one message per ix** | See [Hard rule](#hard-rule-decode-instruction-data-into-structured-objects) — typed fields, no raw/JSON mega-messages. |
 
 Full patterns (failed txs, account filters, index modules): [references/loops-and-filters.md](./references/loops-and-filters.md).
 
@@ -343,7 +404,14 @@ fn anchor_discriminator(name: &str) -> [u8; 8] {
 }
 ```
 
-### SPL Token (1-byte discriminator)
+### SPL Token / Token-2022 (1-byte discriminator)
+
+Same instruction layout family for classic SPL Token and **Token-2022**. Discriminators and account indexes match for Transfer / TransferChecked; **filter by program ID** so you do not mix the two:
+
+| Program | Mainnet ID |
+|---|---|
+| SPL Token | `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` |
+| Token-2022 | `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb` |
 
 - `3` = Transfer — accounts `[source, dest, authority, …]`; **no mint** → cannot filter by mint reliably.
 - `12` = TransferChecked — accounts `[source, mint, dest, authority, …]`; **use this** when filtering a mint (e.g. USDC).
@@ -354,6 +422,7 @@ See [references/common-programs.md](./references/common-programs.md).
 
 ```rust
 const TRACKED_MINT: [u8; 32] = b58!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+const TRACKED_POOL: [u8; 32] = b58!("YourPoolAddressBase58...........");
 
 let accounts = ix.accounts();
 // Example: TransferChecked mint at index 1 (from layout, not guessed)
@@ -385,18 +454,15 @@ After generators, still enforce pre-flight instruction list and account filters 
 
 1. Pre-flight complete (program, instructions, accounts, network, sink, slots).
 2. Parsing path chosen (IDL / Rust source / manual).
-3. `network: solana`, input `sf.solana.type.v1.Block`, crate versions as above.
+3. `build.rs` + `mod pb` include; manifest has `protobuf:` + `binaries:`; matched crate pair; `network: solana`, input `sf.solana.type.v1.Block`.
 4. Loop: `block.transactions()` + `walk_instructions()` + program ID filter.
-5. Match only requested instructions (discriminators).
-6. **Decode** instruction data into **typed structured fields** — **not** JSON strings, hex, or raw `bytes`.
-7. **Define one protobuf message type per selected instruction** (e.g. `Swap`, `Deposit`); wrapper may use repeated fields or `oneof` of those types.
-8. Map accounts to **named** fields from layout; apply account filters.
-9. `initialBlock` = start of needed range; test with `substreams run -s <slot> -t +100 -o jsonl`.
-10. Optional: index module keys for program/account/instruction.
-11. Self-check: no generic mega-message for all ixs; no `*_json` / `raw_data` opaque blobs.
-12. If sink is **ClickHouse / from-proto**: apply reserved-name renames and PK/ORDER BY rules from `substreams-sql` before first deploy.
+5. Match only requested instructions (discriminators); **decode** into **one typed protobuf message per instruction** (named accounts + args).
+6. Account filters from layout; `initialBlock` + short `substreams run -s <slot> -t +100 -o jsonl`.
+7. Optional index keys (pattern — see loops ref); ClickHouse reserved-name renames via `substreams-sql` before first deploy.
 
 ## Examples in this repo
+
+Examples T5.x / T6.2 still pin the **legacy** pair (`substreams 0.6` + `substreams-solana 0.14.x`) — valid and intentional. **New projects use the default row** (`0.7` + `0.15`). Copy patterns, not the Cargo pins, unless you are deliberately staying on the legacy pair.
 
 | Example | Pattern |
 |---|---|
@@ -412,10 +478,11 @@ After generators, still enforce pre-flight instruction list and account filters 
 |---|---|
 | Far fewer events than expected | You used top-level `message.instructions` — switch to `walk_instructions()` |
 | Empty output | Wrong program ID, wrong disc, `initialBlock` past data, or filtering failed txs incorrectly |
-| Mint filter never matches | Using SPL `Transfer` (3) instead of `TransferChecked` (12) |
+| Mint filter never matches | Using SPL `Transfer` (3) instead of `TransferChecked` (12); or wrong program (Token vs Token-2022) |
 | Two `substreams` versions in `cargo tree` | Mixed majors (`0.6`+`0.15` / `0.7`+`0.14`). It still builds — realign to a matched pair anyway |
 | `type Address<'_> cannot be dereferenced` | `ix.accounts()` yields **owned** `Address`; drop the `*` (`if a == MINT`). Only `.iter()` gives you `&Address` |
 | Wrong account field | Re-check IDL account order or `Accounts` struct — do not guess indexes |
+| Pack / build fails missing protos or wasm | Add `protobuf:` + `binaries:` to the manifest and a `build.rs` that runs `prost_build` |
 | Output is hex/base64/JSON of ix data | **Decode** into typed proto fields — see [Hard rule](#hard-rule-decode-instruction-data-into-structured-objects) |
 | Only discriminator / program filter, no args | Incomplete — parse payload + named accounts for every emitted instruction |
 | One `Event` for swap + deposit + create | Split into **one message type per instruction** |

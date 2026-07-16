@@ -19,14 +19,21 @@ Confirm mainnet vs devnet IDs with the user. Values below are **Solana mainnet**
 | USDT | `Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB` |
 | wSOL | `So11111111111111111111111111111111111111112` |
 
-## SPL Token instruction cheatsheet
+## SPL Token / Token-2022 instruction cheatsheet
 
-Program: SPL Token (`Tokenkeg…`).
+**Same layout family** for classic SPL Token and Token-2022 (Transfer / TransferChecked discriminators and account indexes). Always filter by **program ID** first — Token and Token-2022 are different programs:
+
+| Program | Constant |
+|---|---|
+| SPL Token | `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` |
+| Token-2022 | `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb` |
 
 ```rust
 const SPL_TOKEN: [u8; 32] = b58!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+// const TOKEN_2022: [u8; 32] = b58!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 const USDC: [u8; 32] = b58!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
 
+// if ix.program_id() != SPL_TOKEN { continue; }  // or TOKEN_2022 — do not mix silently
 match data.first().copied() {
     Some(3) if data.len() >= 9 && accounts.len() >= 3 => {
         // Transfer — NO mint in accounts; skip if mint-filtering

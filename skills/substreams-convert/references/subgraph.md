@@ -10,7 +10,7 @@ Load this file when converting a subgraph (The Graph) into a Substreams pipeline
 | `subgraph.yaml` data source | `substreams.yaml` module + `initialBlock` |
 | AssemblyScript event handler | Rust `map` module |
 | Entity store (auto) | Explicit `store` module |
-| `graph-node` indexer | `substreams-sink-subgraph` or direct `graph_out` |
+| `graph-node` indexer | **SQL sink (`db_out`)** for greenfield; `EntityChanges` / `graph_out` only if you still need Graph Node (see §5, optional/legacy) |
 | Template (dynamic data source) | Map module emitting new addresses → store |
 
 ## Step-by-Step Migration
@@ -142,7 +142,8 @@ export function handleTransfer(event: TransferEvent): void {
 >
 > ```yaml
 > imports:
->   eth_common: ethereum_common@v0.3.3
+>   # Full spkg URL — short form ethereum_common@v0.3.3 does not resolve via the CLI
+>   eth_common: https://spkg.io/v1/packages/ethereum-common/v0.3.3
 >
 > modules:
 >   - name: map_transfers
@@ -159,7 +160,7 @@ export function handleTransfer(event: TransferEvent): void {
 >   eth_common:filtered_events: "evt_addr:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
 > ```
 >
-> `ethereum_common@v0.3.3` also provides `filtered_calls`, `filtered_transactions`, and
+> `ethereum-common` v0.3.3 also provides `filtered_calls`, `filtered_transactions`, and
 > `filtered_events_and_calls`. For the full block-filtering guide including the SQE query
 > syntax, rolling a custom `blockIndex`, and Solana's `solana_common` equivalents, see
 > the `substreams-dev` skill's `references/block-filtering.md`.
@@ -167,44 +168,60 @@ export function handleTransfer(event: TransferEvent): void {
 > The in-handler address check shown below is a fallback for when no foundational
 > `filtered_*` module covers your use case. When depending on `eth_common:filtered_events`,
 > you do **not** need an in-handler address check — the module has already filtered for you.
+>
+> **Decoding quality (EVM):** prefer the `substreams-ethereum` skill loop —
+> `block.transactions()` + `trx.logs_with_calls()` + Abigen `match_and_decode` — or hand off
+> entirely to that skill. `block.logs()` is a shorter fallback; `logs_with_calls()` excludes
+> reverted sub-calls and is the production default.
 
 ```rust
 use substreams::errors::Error;
-use substreams_ethereum::pb::eth::v2::Block;
+use substreams::Hex;
+use substreams_ethereum::pb::eth::v2 as eth;
 use substreams_ethereum::Event;
 
 use crate::abi::erc20::events::Transfer as TransferEvent;
 use crate::pb::myproject::v1::{Transfer, Transfers};
+
+// Hex::encode is lowercase and has NO 0x — always re-prefix for emitted addresses/tx hashes.
+fn hex0x(b: &[u8]) -> String {
+    format!("0x{}", Hex::encode(b))
+}
 
 // Contract address (from subgraph.yaml source.address)
 const TOKEN_ADDRESS: [u8; 20] =
     hex_literal::hex!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
 
 #[substreams::handlers::map]
-pub fn map_transfers(block: Block) -> Result<Transfers, Error> {
+pub fn map_transfers(block: eth::Block) -> Result<Transfers, Error> {
     let mut transfers = Transfers::default();
 
-    for log in block.logs() {
-        // Filter by contract address (replaces subgraph data source address filter).
-        // In production, prefer a foundational filtered_events module as input
-        // so blocks with no matching logs are skipped entirely (see note above).
-        if log.address() != TOKEN_ADDRESS {
-            continue;
-        }
+    for trx in block.transactions() {
+        // successful txs only
+        let tx_hash = hex0x(&trx.hash);
 
-        // Decode event (replaces AssemblyScript event handler binding)
-        if let Some(event) = TransferEvent::match_and_decode(log) {
-            let tx_hash = format!("0x{}", hex::encode(log.receipt.transaction.hash.as_slice()));
-            let id = format!("{}-{}", tx_hash, log.index());
+        for (log, _call) in trx.logs_with_calls() {
+            // Filter by contract address (replaces subgraph data source address filter).
+            // In production, prefer a foundational filtered_events module as input
+            // so blocks with no matching logs are skipped entirely (see note above).
+            if log.address != TOKEN_ADDRESS {
+                continue;
+            }
 
-            transfers.transfers.push(Transfer {
-                id,
-                from: format!("0x{}", hex::encode(event.from)),
-                to: format!("0x{}", hex::encode(event.to)),
-                amount: event.value.to_decimal(6).to_string(), // 6 = USDC decimals; parameterize per token — never hardcode 18
-                block_number: block.number,
-                timestamp: block.timestamp_seconds(),
-            });
+            // Decode event (replaces AssemblyScript event handler binding)
+            if let Some(event) = TransferEvent::match_and_decode(log) {
+                let id = format!("{}-{}", tx_hash, log.index);
+
+                transfers.transfers.push(Transfer {
+                    id,
+                    from: hex0x(&event.from),
+                    to: hex0x(&event.to),
+                    // 6 = USDC decimals; parameterize per token — never hardcode 18
+                    amount: event.value.to_decimal(6).to_string(),
+                    block_number: block.number,
+                    timestamp: block.timestamp_seconds(),
+                });
+            }
         }
     }
 
@@ -212,9 +229,9 @@ pub fn map_transfers(block: Block) -> Result<Transfers, Error> {
 }
 ```
 
-> **`substreams_ethereum::Event`** provides `match_and_decode` — equivalent to subgraph's automatic event binding. Add `substreams-ethereum = "0.11"` to `Cargo.toml`.
+> **`substreams_ethereum::Event`** provides `match_and_decode` — equivalent to subgraph's automatic event binding. Add `substreams-ethereum = "0.11"` to `Cargo.toml`. Full Abigen / `logs_with_calls` / raw-topic0 patterns → **`substreams-ethereum` skill**.
 
-> **Multiple contract addresses**: Subgraphs commonly index many contracts (e.g. all pairs in a factory). In Substreams, use a `HashSet` of known addresses populated from a store, then check `known_addresses.contains(log.address())`. For dynamically discovered addresses (factory pattern), see Section 6 (Dynamic Data Sources).
+> **Multiple contract addresses**: Subgraphs commonly index many contracts (e.g. all pairs in a factory). In Substreams, use a `HashSet` of known addresses populated from a store, then check membership against `log.address`. For dynamically discovered addresses (factory pattern), see Section 6 (Dynamic Data Sources).
 
 ```rust
 // For a fixed allow-list of contracts:
@@ -224,14 +241,16 @@ const KNOWN_TOKENS: &[[u8; 20]] = &[
 ];
 
 // In handler:
-if !KNOWN_TOKENS.contains(&log.address()) {
+if !KNOWN_TOKENS.contains(&log.address) {
     continue;
 }
 ```
 
 ### 4. Migrating Entity Storage — SQL Sink (Postgres / ClickHouse)
 
-The recommended way to persist subgraph entity data in Substreams is the **SQL sink** (Postgres or ClickHouse), using the `db_out` module pattern with `DatabaseChanges`. This replaces subgraph's auto-managed entity store and gives you a full relational database with SQL Delta support — ideal for subgraph migrations.
+The recommended way to persist subgraph entity data in Substreams is the **SQL sink** (Postgres or ClickHouse), using the `db_out` module pattern with `DatabaseChanges`. This replaces subgraph's auto-managed entity store.
+
+> **Engine choice (one-liner):** **mutable balances / UPDATE / DELETE / upsert / delta ops → PostgreSQL + Database Changes.** ClickHouse (and from-proto on either engine) is **insert-only** — fine for event mirrors, not for current-state entity rows. Details → **`substreams-sql`**.
 
 > **`store` modules** are still used in Substreams, but for a specific purpose: caching intermediate state that other modules need to read during processing (e.g. tracking dynamically discovered contract addresses — see Section 6). They are not the replacement for subgraph entity persistence. Use `db_out` + SQL sink for that.
 
@@ -241,6 +260,13 @@ Create a `schema.sql` that mirrors your subgraph's `schema.graphql` entities:
 
 **Before (GraphQL SDL):**
 ```graphql
+type Transfer @entity {
+  id: ID!
+  from: String!
+  to: String!
+  amount: BigDecimal!
+}
+
 type Balance @entity {
   id: ID!
   address: String!
@@ -250,6 +276,14 @@ type Balance @entity {
 
 **After (`schema.sql`):**
 ```sql
+CREATE TABLE IF NOT EXISTS transfers (
+    id         TEXT NOT NULL,
+    from_addr  TEXT NOT NULL,
+    to_addr    TEXT NOT NULL,
+    amount     NUMERIC NOT NULL,
+    PRIMARY KEY (id)
+);
+
 CREATE TABLE IF NOT EXISTS balances (
     id         TEXT NOT NULL,
     address    TEXT NOT NULL,
@@ -265,11 +299,21 @@ Add to `Cargo.toml`:
 substreams-database-change = "4"
 ```
 
-Add a `db_out` map module that converts your map output into database change records:
+Add a `db_out` map module that converts your map output into database change records.
+
+**There is no auto-CREATE on `update_row`.** Pick the operation explicitly:
+
+| Need | API |
+|---|---|
+| Insert a new row (fail / no-op if exists — CREATE op) | `create_row` |
+| Update an existing row (UPDATE op; row must already exist) | `update_row` |
+| Insert or update | `upsert_row` |
+| Atomic in-DB delta (`COALESCE(col,0) + x`) — **Postgres only** | `upsert_row` + `.add` / `.sub` / `.max` / … |
+
+Use `.set(...)` for field values (including numeric strings). There is **no** `set_bigdecimal`. Canonical Rust path for the proto type:
 
 ```rust
-use substreams::store::{DeltaBigDecimal, Deltas};
-use substreams_database_change::pb::database::{DatabaseChanges, TableChange};
+use substreams_database_change::pb::sf::substreams::sink::database::v1::DatabaseChanges;
 use substreams_database_change::tables::Tables;
 
 #[substreams::handlers::map]
@@ -279,20 +323,44 @@ pub fn db_out(
     let mut tables = Tables::new();
 
     for transfer in transfers.transfers {
-        // Upsert a balance row — SQL Delta handles CREATE vs UPDATE automatically
+        // Event / history row — explicit CREATE
         tables
-            .update_row("balances", &transfer.to)
+            .create_row("transfers", transfer.id.as_str())
+            .set("from_addr", &transfer.from)
+            .set("to_addr", &transfer.to)
+            .set("amount", &transfer.amount);
+
+        // Mutable balance — explicit UPSERT (not update_row auto-CREATE).
+        // PK = address (id in schema). Credit recipient with delta add (Postgres).
+        // If your map already computed an *absolute* balance, use .set("amount", &balance) instead.
+        tables
+            .upsert_row("balances", transfer.to.as_str())
             .set("address", &transfer.to)
-            .set_bigdecimal("amount", &transfer.amount.parse().unwrap_or_default());
+            .add("amount", transfer.amount.as_str());
+
+        tables
+            .upsert_row("balances", transfer.from.as_str())
+            .set("address", &transfer.from)
+            .sub("amount", transfer.amount.as_str());
     }
 
     Ok(tables.to_database_changes())
 }
 ```
 
-#### Step 4c — Wire `db_out` in the manifest
+> The Rust path `pb::database::DatabaseChanges` is **deprecated**. Prefer  
+> `substreams_database_change::pb::sf::substreams::sink::database::v1::DatabaseChanges`.  
+> The wire FQN `sf.substreams.sink.database.v1.DatabaseChanges` is unchanged.
+
+> Full `Tables` API, composite PKs, and delta trait bounds → **`substreams-sql`**.
+
+#### Step 4c — Wire `db_out` in the manifest (modules + imports + sink)
 
 ```yaml
+imports:
+  database: https://github.com/streamingfast/substreams-sink-database-changes/releases/download/v4.0.0/substreams-sink-database-changes-v4.0.0.spkg
+  sql: https://github.com/streamingfast/substreams-sink-sql/releases/download/protodefs-v1.0.7/substreams-sink-sql-protodefs-v1.0.7.spkg
+
 modules:
   - name: map_transfers
     kind: map
@@ -309,34 +377,44 @@ modules:
       - map: map_transfers
     output:
       type: proto:sf.substreams.sink.database.v1.DatabaseChanges
+
+sink:
+  module: db_out
+  type: sf.substreams.sink.sql.service.v1.Service   # sf.substreams.sink.sql.v1.Service is DEPRECATED
+  config:
+    schema: ./schema.sql
+    engine: postgres        # inert for the CLI (dialect comes from the DSN); matters for hosted deploys
 ```
+
+Import the official database-changes (+ sql protodefs) spkg — do not define the proto yourself. The Rust crate emits changes at runtime; the **spkg import** is how the package resolves the type surface for packing and sink config.
 
 #### Step 4d — Deploy to Postgres or ClickHouse
 
-Load the **`substreams-sink-deploy-local` skill** for the full self-managed sink deployment workflow (or **`substreams-hosted-sink`** for a StreamingFast-hosted sink). The short version:
+Load **`substreams-sql`** for module design and **`substreams-sink-deploy-local`** for the self-managed ops path (or **`substreams-hosted-sink`** for StreamingFast-hosted). Short recipe for Database Changes:
 
 ```bash
-# Apply schema
-psql "$DATABASE_URL" -f schema.sql
+export DSN="psql://user:pass@localhost:5432/mydb?sslmode=disable"   # not postgresql://; no double-scheme
 
-# Run the sink
-substreams-sink-sql run \
-  "psql://$DATABASE_URL" \
-  ./substreams.yaml \
-  db_out \
-  --on-module-hash-mistmatch=warn
+substreams build
+# setup applies schema.sql + system tables (cursors, …) from the sink: block
+substreams-sink-sql setup "$DSN" ./substreams.yaml
+
+# run <dsn> <manifest|spkg> [range] — module comes from sink: only (not a trailing CLI arg)
+substreams-sink-sql run "$DSN" ./substreams.yaml "6082465:+1000" \
+  --on-module-hash-mismatch=warn \
+  --batch-block-flush-interval=1   # short smoke ranges; default flush is 1000 blocks
 ```
 
-For ClickHouse, the schema uses `ReplacingMergeTree` instead of plain `PRIMARY KEY` — see the `substreams-sink-deploy-local` skill for details.
+For ClickHouse, prefer **from-proto** (insert-only) unless you accept CDC insert-only + no DB reorg management — see `substreams-sql` / `substreams-sink-deploy-local`.
 
-> **SQL Delta**: `substreams-database-change` v4 includes SQL Delta support. `tables.update_row()` automatically emits the correct `CREATE` / `UPDATE` / `DELETE` operation based on whether the row already exists, mirroring subgraph's `entity.save()` semantics without requiring explicit `store` modules for persistence.
+### 5. Output: graph_out (optional / legacy)
 
-
-### 5. Output: graph_out ~~(deprecated)~~
-
-> **Graph Node no longer supports Substreams-powered subgraphs.** The `graph_out` / `EntityChanges` output pattern is deprecated and should not be used for new projects. Use the SQL sink (`db_out` + Postgres or ClickHouse) described in Section 4 instead.
+> **Greenfield conversions should use the SQL sink (`db_out`) in Section 4.**  
+> `graph_out` / `EntityChanges` is for pipelines that still need Graph Node, hosted subgraphs, or `substreams-sink-subgraph` — not the default migration path.
 >
-> This section is retained for reference only, in case you are maintaining an existing `graph_out` module.
+> **Crate caveat:** do **not** add `substreams-entity-change` on modern `substreams = "0.7"` — it pins `prost 0.11` / `substreams 0.5` and type-conflicts with the rest of the stack. Prefer **inlining** the canonical `EntityChanges` proto (see **`substreams-sink`**).
+>
+> Wire compatibility and a working `graph_out` sketch live in the `substreams-sink` skill. This convert skill does not re-teach full entity-change tutorials.
 
 
 ### 6. Dynamic Data Sources (Templates)
@@ -414,11 +492,18 @@ package:
   description: ERC20 subgraph converted to Substreams         # set it — avoids package.description warning
 network: mainnet
 
+imports:
+  database: https://github.com/streamingfast/substreams-sink-database-changes/releases/download/v4.0.0/substreams-sink-database-changes-v4.0.0.spkg
+  sql: https://github.com/streamingfast/substreams-sink-sql/releases/download/protodefs-v1.0.7/substreams-sink-sql-protodefs-v1.0.7.spkg
+  # Optional foundational filter package (full URL, not name@version):
+  # eth_common: https://spkg.io/v1/packages/ethereum-common/v0.3.3
+
 protobuf:
   files:
     - transfers.proto
   importPaths:
     - ./proto
+  excludePaths: [sf/substreams, google]
 
 binaries:
   default:
@@ -441,6 +526,13 @@ modules:
       - map: map_transfers
     output:
       type: proto:sf.substreams.sink.database.v1.DatabaseChanges
+
+sink:
+  module: db_out
+  type: sf.substreams.sink.sql.service.v1.Service
+  config:
+    schema: ./schema.sql
+    engine: postgres
 ```
 
 ## Common Pitfalls
@@ -448,12 +540,16 @@ modules:
 | Subgraph Pitfall | Substreams Solution |
 |---|---|
 | `startBlock: 0` on all data sources | Use the actual contract deployment block as `initialBlock` |
-| Entities auto-saved to store | Use explicit `store` module with appropriate `updatePolicy` |
+| Entities auto-saved to store | Persist with `db_out` + SQL; use `store` only for intermediate WASM state |
+| Mutable entity balances on ClickHouse | Use **PostgreSQL + Database Changes** (CH/from-proto are insert-only) |
 | `event.params.value.toBigDecimal()` | `event.value.to_decimal(decimals)` (substreams BigInt helper) |
-| `Address.fromString(hex)` | `hex::decode(addr.trim_start_matches("0x"))` |
+| `Address.fromString(hex)` | `hex::decode(addr.trim_start_matches("0x"))` or `Hex` + `0x` prefix |
 | Template / dynamic data source | Factory pattern: store of addresses + filter in map module |
-| `BigDecimal.plus()` across blocks | `store` with `updatePolicy: add` and `valueType: bigdecimal` |
-| `entity.save()` on every event | Emit from map → drive store deltas → `graph_out` reads deltas |
+| `BigDecimal.plus()` across blocks | `store` with `updatePolicy: add` and `valueType: bigdecimal`, or Postgres delta `.add` |
+| `entity.save()` on every event | Explicit `create_row` / `update_row` / `upsert_row` in `db_out` (SQL-first). Do **not** route new migrations through `graph_out` |
+| Assuming `update_row` auto-creates | It does **not** — use `upsert_row` or `create_row` when the row may not exist |
+| `ethereum_common@v…` import 404 | Use full URL `https://spkg.io/v1/packages/ethereum-common/v0.3.3` |
+| Module as trailing sink-sql CLI arg | Module comes from `sink:` only; CLI is `setup`/`run <dsn> <manifest\|spkg> [range]` |
 | Subgraph grafting (resume from snapshot) | No equivalent in Substreams — `initialBlock` is the only start point. Set it to the contract deployment block; there is no way to resume from a prior subgraph deployment's state. Plan for a full backfill from `initialBlock`. |
 
 ## Testing

@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.3.0
+  version: 1.3.1
   author: StreamingFast
   documentation: https://substreams.streamingfast.io
 ---
@@ -13,6 +13,29 @@ metadata:
 # Substreams Conversion Expert
 
 Expert assistant for converting existing blockchain indexing projects — subgraphs and Solana contracts — into high-performance Substreams pipelines.
+
+## Pre-flight (before writing code)
+
+**Do not scaffold protos, Rust, or manifests until the user has answered (or already stated) these.** One question per turn when anything is missing; always offer an **"Other / custom"** option.
+
+| Order | Focus | Typical choices |
+|---|---|---|
+| 1 | **Source** | Subgraph (`.yaml` + GraphQL + AS) · Solana Anchor IDL · Solana Rust source · **Other** |
+| 2 | **Network / chain** | Ethereum mainnet · Base · Solana · **Other** |
+| 3 | **Destination** | `substreams run` only · SQL self-managed · SQL hosted · Graph Node / EntityChanges (legacy) · **Other** |
+
+Then hand off decoding and sink detail to the specialist skills — do not re-implement full tutorials here:
+
+| Concern | Skill |
+|---|---|
+| EVM logs, Abigen, `logs_with_calls`, topic0 | **`substreams-ethereum`** |
+| Solana `walk_instructions`, IDL/Anchor, SPL | **`substreams-solana`** |
+| `db_out`, Postgres vs ClickHouse, `DatabaseChanges` | **`substreams-sql`** |
+| Self-managed `substreams-sink-sql setup`/`run` | **`substreams-sink-deploy-local`** |
+| StreamingFast-hosted SQL sink | **`substreams-hosted-sink`** |
+| EntityChanges / optional `graph_out` | **`substreams-sink`** (not the default greenfield path) |
+
+**Mutable balances / current-state entities → PostgreSQL + Database Changes.** ClickHouse and from-proto are insert-only.
 
 ## Core Concepts
 
@@ -47,11 +70,9 @@ Load this skill when the user wants to:
 
 ## Conversion Workflow Overview
 
-### Step 1 — Identify the source
+### Step 1 — Pre-flight (source → network → destination)
 
-Ask the user which type of project they are converting:
-- A subgraph (provides `subgraph.yaml`, `schema.graphql`, AssemblyScript mappings)?
-- A Solana contract/program — do they have an **Anchor IDL** (use `substreams init`) or **Rust source** (manual conversion)?
+Complete the [Pre-flight](#pre-flight-before-writing-code) table above. Do not skip destination: it drives whether you build `db_out`, stop at a domain map, or (rarely) keep EntityChanges.
 
 ### Step 2 — Load the relevant reference
 
@@ -64,17 +85,18 @@ Convert the source schema into Substreams protobuf types (`.proto` files).
 
 ### Step 4 — Implement Rust handlers
 
-Translate the source handlers (AssemblyScript or Anchor/native Rust) into Substreams `map` and `store` modules.
+Translate the source handlers (AssemblyScript or Anchor/native Rust) into Substreams `map` and `store` modules. Prefer the loop shapes in **`substreams-ethereum`** / **`substreams-solana`** rather than inventing new ones.
 
 ### Step 5 — Configure the manifest
 
-Wire modules together in `substreams.yaml`, referencing `initialBlock` from the original data source definition.
+Wire modules together in `substreams.yaml`, referencing `initialBlock` from the original data source definition. For SQL: include standard `imports:` (database-changes + sql protodefs) and a `sink:` block — see the complete example in [references/subgraph.md](./references/subgraph.md).
 
 ### Step 6 — Build and verify
 
 > **Also load `substreams-dev`** for Cargo.toml setup, build commands, `initialBlock` guidance, and general Rust module development patterns.
-> **Also load `substreams-sink`** or **`substreams-sql`** when the target output is a SQL sink (`db_out` → Postgres or ClickHouse).
+> **Also load `substreams-sql`** when the target output is a SQL sink (`db_out` → Postgres or ClickHouse).
 > **Also load `substreams-sink-deploy-local`** when ready to run the converted substreams against a live sink (Postgres, ClickHouse, etc.) on your own infrastructure. For a StreamingFast-hosted sink, use `substreams-hosted-sink` instead.
+> **Also load `substreams-sink`** only if you must keep Graph Node / EntityChanges (optional/legacy).
 
 ```bash
 substreams build

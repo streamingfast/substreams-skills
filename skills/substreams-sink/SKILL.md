@@ -24,7 +24,7 @@ Expert assistant for consuming Substreams data - building production-grade sinks
 | **StreamingFast hosts the sink** (Portal HostedService) | `substreams-hosted-sink` (+ `portal-api`) |
 | **graph_out / EntityChanges module** (produce entities) | this skill (inline proto) + `substreams-dev` |
 
-Prefer existing sink CLIs (`substreams-sink-sql`, files, kv) over a hand-rolled consumer when they already cover the destination.
+Prefer existing sink CLIs (the built-in SQL sink — `substreams sink postgres` / `substreams sink clickhouse` —, files, kv) over a hand-rolled consumer when they already cover the destination.
 
 ## Core Concepts
 
@@ -38,13 +38,13 @@ A Substreams sink is an application that:
 - **Processes** the data into your destination (database, queue, etc.)
 
 > **Note:** Before building a custom sink, consider using existing solutions:
-> - **[substreams-sink-sql](https://github.com/streamingfast/substreams-sink-sql)** - For PostgreSQL and ClickHouse. Handles cursor management, reorgs, batching, and schema management out of the box. Install via `brew install streamingfast/tap/substreams-sink-sql` or [download binaries](https://github.com/streamingfast/substreams-sink-sql/releases). For full CLI ops, load `substreams-sink-deploy-local`.
+> - **Built-in SQL sink** (`substreams sink postgres` / `substreams sink clickhouse`) - For PostgreSQL and ClickHouse. Handles cursor management, reorgs, batching, and schema management out of the box. Install via `brew install streamingfast/tap/substreams` or [download binaries](https://github.com/streamingfast/substreams). For full CLI ops, load `substreams-sink-deploy-local`.
 > - **[substreams-sink-kv](https://github.com/streamingfast/substreams-sink-kv)** - For key-value stores.
 > - **[substreams-sink-files](https://github.com/streamingfast/substreams-sink-files)** - For file-based outputs (JSON, CSV, Parquet).
 >
-> **Important:** Do NOT use `substreams-sink-postgres` - this is a deprecated name. Use `substreams-sink-sql` which supports both PostgreSQL and ClickHouse.
+> **Important:** Both `substreams-sink-postgres` and the standalone `substreams-sink-sql` binary are deprecated names. The SQL sink now lives in the `substreams` CLI (`substreams sink postgres` / `substreams sink clickhouse`), which supports both PostgreSQL and ClickHouse.
 >
-> The examples in this guide use database code for illustration purposes. For production SQL database sinks, `substreams-sink-sql` is highly recommended as it solves cursor persistence, reorg handling, batching, and many edge cases already.
+> The examples in this guide use database code for illustration purposes. For production SQL database sinks, the built-in SQL sink is highly recommended as it solves cursor persistence, reorg handling, batching, and many edge cases already.
 
 ### Key Components
 
@@ -86,7 +86,7 @@ Before writing a `graph_out` or `db_out` module, choose the correct output proto
 | You want to write to... | Output proto type | Crate / proto package | When to use |
 |---|---|---|---|
 | **The Graph (subgraph entities)** | `sf.substreams.sink.entity.v1.EntityChanges` | `substreams-entity-change` (BROKEN — see below) | `graph_out` modules feeding a Graph Node, hosted subgraph, or `substreams-sink-subgraph` |
-| **Postgres / ClickHouse / SQL DB** | `sf.substreams.sink.database.v1.DatabaseChanges` | `substreams-database-change = "4"` | `db_out` modules feeding `substreams-sink-sql` or hosted SQL sink |
+| **Postgres / ClickHouse / SQL DB** | `sf.substreams.sink.database.v1.DatabaseChanges` | `substreams-database-change = "4"` | `db_out` modules feeding `substreams sink postgres`/`clickhouse` or hosted SQL sink |
 | **Custom sink (Go/Rust consumer)** | Your own proto type | n/a | Bespoke consumers reading raw module output |
 
 **Rule**: never use `DatabaseChanges` for graph-out, never use `EntityChanges` for SQL sinks. They are not interchangeable. Acceptance tests in eval corpus auto-zero on wrong proto type.
@@ -101,7 +101,7 @@ Do **not** rely on the `substreams-entity-change` crate for modern `substreams =
 
 No version constraint fully fixes this for 0.7 today. Prefer inlining the proto (below). Re-check [crates.io](https://crates.io/crates/substreams-entity-change) before changing this advice.
 
-> **New projects:** prefer SQL (`db_out` + `substreams-sql` / `substreams-sink-sql`) over `graph_out` unless you specifically need Graph Node / EntityChanges.
+> **New projects:** prefer SQL (`db_out` + `substreams-sql` / the built-in SQL sink) over `graph_out` unless you specifically need Graph Node / EntityChanges.
 
 ### Workaround: inline the entity-change proto
 

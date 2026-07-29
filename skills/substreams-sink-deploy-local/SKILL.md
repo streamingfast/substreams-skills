@@ -21,7 +21,7 @@ Use this skill when the user says any of:
 - "I want to send data to Postgres / ClickHouse"
 - "stream my Substreams to S3 / GCS / files"
 - "publish to PubSub / a webhook"
-- "set up substreams-sink-sql / -files / -pubsub"
+- "set up the SQL sink (`substreams sink postgres` / `clickhouse`) / -files / -pubsub"
 
 **Do NOT use this skill** when the user is:
 - Wanting StreamingFast to host & run the sink for them → use `substreams-hosted-sink`
@@ -35,7 +35,7 @@ Use this skill when the user says any of:
 Where does the data need to land?
 
 ├── SQL database queries (analytics, joins, BI)
-│   └── Postgres / ClickHouse  →  substreams-sink-sql
+│   └── Postgres / ClickHouse  →  substreams sink postgres|clickhouse  (built into the substreams CLI)
 │
 ├── Object storage / data lake (S3, GCS, local FS)
 │   └── CSV / Parquet bulk files →  substreams-sink-files   (community; or built-in protojson)
@@ -77,8 +77,8 @@ Where does the data need to land?
 
 | Sink                        | Output module proto type                                   |
 |-----------------------------|------------------------------------------------------------|
-| `substreams-sink-sql` (CDC) | `proto:sf.substreams.sink.database.v1.DatabaseChanges`     |
-| `substreams-sink-sql` (from-proto) | your annotated domain proto (insert-only)           |
+| `substreams sink postgres`/`clickhouse` (CDC) | `proto:sf.substreams.sink.database.v1.DatabaseChanges` |
+| `substreams sink postgres`/`clickhouse` (from-proto) | your annotated domain proto (insert-only)  |
 | `substreams-sink-pubsub`    | `proto:sf.substreams.sink.pubsub.v1.Publish`               |
 | `substreams-sink-files`     | depends on `--encoder` — see Files section (`lines` requires `sf.substreams.sink.files.v1.Lines`) |
 | `substreams sink webhook`   | any (delivered as JSON)                                    |
@@ -93,20 +93,43 @@ Wrong output type → redirect to `substreams-sql` (`db_out`) or `substreams-dev
 
 ### Install
 
+The SQL sink is **built into the `substreams` CLI** as of **v1.20.2** — there is no separate binary:
+
 ```bash
-brew install streamingfast/tap/substreams-sink-sql            # preferred
-# or: https://github.com/streamingfast/substreams-sink-sql/releases
-# or: go install github.com/streamingfast/substreams-sink-sql/cmd/substreams-sink-sql@latest
+brew install streamingfast/tap/substreams                     # preferred
+# or: https://github.com/streamingfast/substreams/releases
+# or: docker pull ghcr.io/streamingfast/substreams
+
+substreams sink postgres --help
+substreams sink clickhouse --help
 ```
 
-### Two mapping modes (ops paths)
+> **Migrating from the standalone binary?** `substreams-sink-sql` is deprecated and folded into the CLI. Existing databases keep working — cursor tables and schemas are unchanged, so the CLI resumes where the binary left off. Full command/flag mapping: [migration guide](https://github.com/streamingfast/substreams/blob/develop/docs/how-to-guides/sinks/sql/migration.md). On the old binary the conventions differ (positional DSN, positional `<start>:<stop>` range, `--clickhouse-*` flags, `--metrics-listen-addr`).
 
-| Mode | Engine | CLI path | Module output | Ops |
-|------|--------|----------|---------------|-----|
-| **Database Changes (CDC)** | **PostgreSQL** | `setup` then `run` | `DatabaseChanges` | INSERT/UPDATE/UPSERT/DELETE |
-| **From-proto (relational)** | Postgres **or ClickHouse** | `from-proto` | your annotated proto | insert-only |
+### Command tree
 
-For ClickHouse, prefer **from-proto** (see `substreams-sql` skill). CDC `setup`+`run` against ClickHouse is not the guided path here.
+```
+substreams sink postgres   <manifest> [<module>]     # runs the sink — there is NO `run` subcommand
+substreams sink postgres   setup <manifest>
+substreams sink postgres   generate-csv | inject-csv | tools cursor {read,write,delete}
+
+substreams sink clickhouse <manifest> [<module>]
+substreams sink clickhouse setup <manifest>
+substreams sink clickhouse tools cursor {read,write,delete}
+```
+
+The engine is part of the command name and must match the DSN scheme. `generate-csv`/`inject-csv` are **PostgreSQL-only**. There is no `create-user` command — create the database user yourself.
+
+### Two mapping modes (auto-detected)
+
+The engine command and `setup` both detect the mode from the **output module's proto type** — there is no `from-proto` subcommand any more:
+
+| Mode | Triggered by | Engine | Module output | Ops |
+|------|--------------|--------|---------------|-----|
+| **Database Changes (CDC)** | output type is `DatabaseChanges` | **PostgreSQL** | `DatabaseChanges` | INSERT/UPDATE/UPSERT/DELETE |
+| **From-proto (relational)** | any other output type | Postgres **or ClickHouse** | your annotated proto | insert-only |
+
+For ClickHouse, prefer **from-proto** (see `substreams-sql` skill). CDC against ClickHouse is not the guided path here.
 
 Build-side details (Rust, annotations, ClickHouse ORDER BY rules) → **`substreams-sql`**.
 
@@ -119,22 +142,29 @@ my-substreams/
 └── my-substreams-v0.1.0.spkg
 ```
 
-The package **must** declare a `sink:` block so `setup`/`run` know the module and schema:
+The package **must** declare a `sink:` block so `setup` and the engine command know the module and schema:
 
 ```yaml
 sink:
   module: db_out
-  type: sf.substreams.sink.sql.v1.Service
+  type: sf.substreams.sink.sql.service.v1.Service   # sf.substreams.sink.sql.v1.Service still works but is deprecated
   config:
     schema: ./schema.sql
     engine: postgres
 ```
 
-`setup` creates sink bookkeeping tables (`cursors`, `substreams_history`) **and** applies `schema.sql`. There is **no** `substreams-sink-sql generate` command for schema templates — write `schema.sql` yourself (or copy from a known-good package / the `substreams-sql` skill patterns). Do not confuse with `generate-csv` (bulk CSV dump for high-throughput inject).
+`setup` **always** resolves the module from `sink: module:` — it takes only a manifest argument, with no positional module override. Without that block it fails with `sink module is required in sink config`. The engine command infers the same way, but there you *can* pass the module as a second positional argument.
 
-### DSN format
+`setup` works in **both** modes, detecting which from the output module type:
 
-`substreams-sink-sql` accepts these schemes ( **`postgresql://` is rejected** ):
+- **Database Changes**: creates the bookkeeping tables (`cursors`, `substreams_history`) **and** applies your `schema.sql`.
+- **From-proto**: derives the schema from the module's output proto, creates the database schema and tables, then exits. Idempotent — safe to re-run. (The engine command does this on startup too, so `setup` is optional here; run it when you want the DDL applied ahead of time.)
+
+There is **no** `generate` command for schema templates — write `schema.sql` yourself (or copy from a known-good package / the `substreams-sql` skill patterns). Do not confuse with `generate-csv` (bulk CSV dump for high-throughput inject).
+
+### DSN
+
+The DSN is a `--dsn` flag or the `SUBSTREAMS_SINK_DSN` env var — **not** a positional argument. Its scheme must match the engine in the command name, and these are the accepted schemes ( **`postgresql://` is rejected** ):
 
 ```bash
 # Postgres — use psql:// or postgres:// only
@@ -150,55 +180,59 @@ Optional Postgres isolation: `?schemaName=ethereum` (sink-specific; multi-pipeli
 
 > **Note:** Parquet/CSV lake output is **not** a SQL DSN — use `substreams-sink-files` or `substreams sink protojson`.
 >
-> An invalid scheme errors with `allowed schemes: [psql,postgres,clickhouse,parquet]`. **Ignore the `parquet` entry** — it is an unimplemented leftover, not a sink target. Passing `parquet://` gets past DSN validation and then panics in `from-proto` / fails driver lookup in `run`.
+> An invalid scheme errors with `allowed schemes: [psql,postgres,clickhouse,parquet]`. **Ignore the `parquet` entry** — it is an unimplemented leftover, not a sink target. Passing `parquet://` is rejected up front anyway, since the DSN scheme has to match the engine in the command name (`DSN scheme "parquet" does not match command "postgres"`).
 
 ### Setup → Run (Database Changes / Postgres)
 
 ```bash
-# CLI: substreams-sink-sql run <dsn> <manifest> [<start>:<stop>] [flags]
-# Module is taken from the package's sink: section — not a positional arg.
+# CLI: substreams sink postgres <manifest> [<module>] [flags]   — no `run`, no positional DSN
+# Module defaults to the package's sink: section; pass it positionally only to override.
 # -e/--endpoint optional if the .spkg embeds network/endpoint; else required.
 
 export SUBSTREAMS_API_KEY=server_xxx   # or SUBSTREAMS_API_TOKEN for JWT/legacy
-export DSN="psql://user:pass@localhost:5432/mydb?sslmode=disable"
+export SUBSTREAMS_SINK_DSN="psql://user:pass@localhost:5432/mydb?sslmode=disable"
 
-substreams-sink-sql setup "$DSN" ./my-substreams.spkg
+substreams sink postgres setup ./my-substreams.spkg
 
-substreams-sink-sql run "$DSN" ./my-substreams.spkg "12000000:+1000000" \
+substreams sink postgres ./my-substreams.spkg \
+    -s 12000000 -t +1000000 \
     -e "https://mainnet.eth.streamingfast.io:443"
 
 # Short test ranges: force flush every block (default batch flush is 1000 blocks)
-substreams-sink-sql run "$DSN" ./pkg.spkg "18000000:+100" -e "$EP" \
+substreams sink postgres ./pkg.spkg -s 18000000 -t +100 -e "$EP" \
     --batch-block-flush-interval=1
 ```
 
-Block range: positional `START:STOP` or `START:+N`, or omit stop for live tail. You can also use `-s` / `-t` flags.
+Block range is `-s/--start-block` and `-t/--stop-block`, exactly like `substreams run` (`-t +N` = N blocks past start; omit `-t` for live tail). The old positional `START:STOP` is gone — the only positional range left is `inject-csv`'s.
 
 Auth is **data-plane** auth for the streaming endpoint — not the Portal admin API. A Portal token from `portal-api-jwt` does **not** authenticate this self-managed sink.
 
 ### From-proto path (Postgres or ClickHouse)
 
+Same command — the mode follows the output module's proto type, and the schema is derived from protobuf `schema.*` annotations (no `schema.sql`):
+
 ```bash
-# Schema is derived from protobuf schema.* annotations — no schema.sql for DDL
-substreams-sink-sql from-proto "$DSN" ./substreams.yaml [output-module]
+substreams sink postgres ./substreams.yaml --dsn "$DSN"     # add a module name after the manifest to override sink: module:
 # ClickHouse example:
-substreams-sink-sql from-proto "clickhouse://default:@localhost:9000/default" ./substreams.yaml
+substreams sink clickhouse ./substreams.yaml --dsn "clickhouse://default:@localhost:9000/default"
 ```
+
+ClickHouse-only flags (de-prefixed from the old `--clickhouse-*`): `--cluster`, `--cursor-file-path`, `--sink-info-folder`, `--query-retry-count`, `--query-retry-sleep`.
 
 ### Cursor management
 
-Cursor is written automatically (Postgres: `cursors` table; ClickHouse from-proto: cursor file / sink info — see CLI flags). **Do not manage cursors by hand** for normal restarts.
+Cursor is written automatically (Postgres: `cursors` table for CDC, `_cursor_` for from-proto; ClickHouse from-proto: cursor file, `--cursor-file-path`, default `cursor.txt`). **Do not manage cursors by hand** for normal restarts.
 
 To intentionally wipe cursor(s) and reprocess:
 
 ```bash
 # There is no `undo` subcommand
-substreams-sink-sql tools cursor delete --all --dsn="$DSN"
+substreams sink postgres tools cursor delete --all --dsn "$DSN"
 # Or delete a single module hash:
-# substreams-sink-sql tools cursor delete <module_hash> --dsn="$DSN"
+# substreams sink postgres tools cursor delete <module_hash> --dsn "$DSN"
 ```
 
-Also: `tools cursor read` / `tools cursor write` for operators.
+Also: `tools cursor read` / `tools cursor write` for operators. Wiping the cursor reprocesses from the original start block — clear the destination tables too or you get duplicate rows.
 
 ### Reorg handling
 
@@ -326,7 +360,7 @@ Deploy via `graph deploy`, not a substreams sink binary. Output module must be `
 | You want | Pick |
 |----------|------|
 | Zero ops, StreamingFast runs SQL | **Hosted** → `substreams-hosted-sink` |
-| Free / self-managed Postgres/CH | This skill (`substreams-sink-sql`) |
+| Free / self-managed Postgres/CH | This skill (`substreams sink postgres`/`clickhouse`) |
 | Subgraph on The Graph | Substreams-powered Subgraph |
 | Files / data lake | `substreams-sink-files` or protojson |
 | Events in your app process | Stream SDK (`substreams-sink`) |
@@ -358,7 +392,7 @@ Default env vars: `SUBSTREAMS_API_KEY` (API keys) and/or `SUBSTREAMS_API_TOKEN` 
 ### 6. Short range, zero rows — batch flush default is 1000
 
 ```bash
-substreams-sink-sql run "$DSN" ./pkg.spkg "18000000:+100" -e "$EP" \
+substreams sink postgres ./pkg.spkg -s 18000000 -t +100 -e "$EP" --dsn "$DSN" \
     --batch-block-flush-interval=1
 ```
 
@@ -376,7 +410,7 @@ Mismatch → rewrite Rust or use a single synthetic PK. Build patterns → `subs
 ### 8. Module hash mismatch after code/schema change
 
 ```bash
-substreams-sink-sql run ... --on-module-hash-mismatch=warn   # or ignore
+substreams sink postgres ... --on-module-hash-mismatch=warn   # or ignore
 ```
 
 Neither resets the cursor — you mix old and new data. For a clean restart: wipe destination/cursor and re-run from the intended start block.
@@ -385,13 +419,20 @@ Neither resets the cursor — you mix old and new data. For a clean restart: wip
 
 Service account needs `pubsub.publisher`. Check ADC / `GOOGLE_APPLICATION_CREDENTIALS`.
 
-### 10. Invented CLI: `generate` or `undo`
+### 10. Invented CLI — commands and flags that do not exist
 
-- **No** `substreams-sink-sql generate` — write `schema.sql` yourself.
-- **No** `substreams-sink-sql undo` — use `tools cursor delete`.
-- **No** `--workers` on `substreams-sink-sql run` — do not invent parallel-worker flags. For provider-side parallelism the real knob is the header `-H X-Substreams-Parallel-Workers=<n>` (the only other valid header is `X-substreams-acknowledge-non-deterministic`); otherwise use sequential backfill ranges.
+Muscle memory from the old standalone binary produces most of these:
+
+- **No `run` subcommand.** `substreams sink postgres <manifest>` runs the sink itself. Typing `run` is caught with an explicit error, but do not write it into scripts or docs.
+- **No `from-proto` subcommand** — the mode is auto-detected from the output module type.
+- **No `create-user`** — removed; create the database user directly in your database.
+- **No** `generate` — write `schema.sql` yourself (`generate-csv` is a different, real command).
+- **No** `undo` — use `tools cursor delete`.
+- **No positional DSN and no positional block range** — `--dsn`/`SUBSTREAMS_SINK_DSN` and `-s`/`-t`. (`inject-csv` keeps its positional `<start>:<stop>` file range.)
+- **No** `--metrics-listen-addr` — it is `--prometheus-addr` now (same `localhost:9102` default).
+- **No** `--workers` — do not invent parallel-worker flags. For provider-side parallelism the real knob is the header `-H X-Substreams-Parallel-Workers=<n>` (the only other valid header is `X-substreams-acknowledge-non-deterministic`); otherwise use sequential backfill ranges.
 - **No** `csv` / `jsonl` encoder on `substreams-sink-files` — only `parquet`, `lines`, `protojson:.<field>[]`.
-- **No** `parquet://` sink target. `parquet` appears in the sink-sql DSN parser's allowed scheme list, but nothing implements it — `from-proto` panics on it and `run`/`setup` fail at driver lookup. Use `substreams-sink-files --encoder=parquet`.
+- **No** `parquet://` sink target. `parquet` appears in the DSN parser's allowed scheme list, but nothing implements it, and the engine/DSN scheme check rejects it before anything runs. Use `substreams-sink-files --encoder=parquet`.
 
 ---
 
@@ -401,17 +442,17 @@ Service account needs `pubsub.publisher`. Check ADC / `GOOGLE_APPLICATION_CREDEN
 
 ```bash
 # Bounded historical range
-substreams-sink-sql run "$DSN" ./pkg.spkg "12000000:18000000" -e "$EP"
+substreams sink postgres ./pkg.spkg -s 12000000 -t 18000000 -e "$EP" --dsn "$DSN"
 
-# Live tail from handoff block (omit stop)
-substreams-sink-sql run "$DSN" ./pkg.spkg "18000000:" -e "$EP"
+# Live tail from handoff block (omit -t)
+substreams sink postgres ./pkg.spkg -s 18000000 -e "$EP" --dsn "$DSN"
 ```
 
-High-volume Postgres inject: `generate-csv` → `inject-csv` → `run` (see upstream SQL sink README). Validate `cursors` with `tools cursor read` after inject.
+High-volume Postgres inject: `generate-csv` → `inject-csv` → run the sink. Validate `cursors` with `tools cursor read` after inject.
 
 ### Monitoring
 
-Prometheus: global `--metrics-listen-addr` (default **`localhost:9102`**). Scrape the process and alert on stall (last processed block not advancing) and elevated error/undo rates. Prefer live metric names from `/metrics` over hard-coded lists — they vary by version.
+Prometheus: `--prometheus-addr` (default **`localhost:9102`**) — this replaced the old `--metrics-listen-addr`. Bind `0.0.0.0:9102` to scrape from outside a container. Scrape the process and alert on stall (last processed block not advancing) and elevated error/undo rates. Prefer live metric names from `/metrics` over hard-coded lists — they vary by version. pprof is opt-in via `--pprof-listen-addr`.
 
 ### Reorg-safe accounting
 
@@ -427,17 +468,17 @@ Kill mid-batch and restart: cursor resumes last committed batch → no duplicate
 
 ```bash
 export SUBSTREAMS_API_KEY=server_xxx
-export DSN="psql://user:pass@localhost:5432/mydb?sslmode=disable"
+export SUBSTREAMS_SINK_DSN="psql://user:pass@localhost:5432/mydb?sslmode=disable"
 export PSQL_DSN="postgresql://user:pass@localhost:5432/mydb?sslmode=disable"  # psql client only
 
 # 0. Package with db_out + sink: { module, schema: ./schema.sql }  (substreams-sql skill)
 # 1. Apply schema + system tables
-substreams-sink-sql setup "$DSN" ./erc20.spkg
+substreams sink postgres setup ./erc20.spkg
 
-# 2. Run
-substreams-sink-sql run "$DSN" ./erc20.spkg "12000000:+10000" \
+# 2. Run the sink (no `run` subcommand)
+substreams sink postgres ./erc20.spkg -s 12000000 -t +10000 \
     -e "https://mainnet.eth.streamingfast.io:443" \
-    --metrics-listen-addr=localhost:9102
+    --prometheus-addr=localhost:9102
 
 # 3. Query
 psql "$PSQL_DSN" -c "SELECT count(*) FROM erc20_transfers"
@@ -448,7 +489,8 @@ psql "$PSQL_DSN" -c "SELECT count(*) FROM erc20_transfers"
 ## Resources
 
 - Sinks overview: https://docs.substreams.dev/how-to-guides/sinks
-- SQL sink: https://github.com/streamingfast/substreams-sink-sql
+- SQL sink (built into the CLI): https://github.com/streamingfast/substreams
+- Migrating off the standalone SQL sink: https://github.com/streamingfast/substreams/blob/develop/docs/how-to-guides/sinks/sql/migration.md
 - Files sink: https://github.com/streamingfast/substreams-sink-files
 - PubSub sink: https://github.com/streamingfast/substreams-sink-pubsub
 - The Graph (subgraphs): https://thegraph.com/docs/en/cookbook/substreams-powered-subgraphs/

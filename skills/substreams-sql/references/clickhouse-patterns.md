@@ -2,7 +2,7 @@
 
 Deep reference for ClickHouse sinks. See `SKILL.md` for mode selection.
 
-Verified against `substreams-sink-sql` **v4.13.1** and ClickHouse **26.6.1**.
+Verified against the built-in SQL sink in `substreams` **v1.20.2** and ClickHouse **26.6.1**.
 
 ## Mode
 
@@ -120,7 +120,7 @@ Exactly three fields:
 `function` enum: `toYYYYMM`, `toYYYYDD`, `toYear`, `toMonth`, `toDate`, `toStartOfMonth`.
 `index_fields.type`: `minmax`, `set`, `ngrambf_v1`, `tokenbf_v1`, `bloom_filter`.
 
-⚠️ **Upstream bugs in v4.13.1:** `toStartOfMonth` hits an empty switch case and is **silently ignored** (emits the raw field); `toYYYYDD` emits `toYYYYMMDD`. Stick to `toYYYYMM`.
+⚠️ **Upstream bugs, still present in substreams v1.20.2:** `toStartOfMonth` hits an empty switch case and is **silently ignored** (emits the raw field); `toYYYYDD` emits `toYYYYMMDD`. Stick to `toYYYYMM`.
 
 ## Column naming: only `index` is a problem
 
@@ -137,7 +137,7 @@ After any rename, `CREATE TABLE IF NOT EXISTS` will **not** add the column to an
 
 ## Cursors live on disk
 
-**The ClickHouse from-proto cursor is a local file, not a database table** — default `cursor.txt`, set via `--clickhouse-cursor-file-path`. The schema hash is likewise a local file under `--clickhouse-sink-info-folder`.
+**The ClickHouse from-proto cursor is a local file, not a database table** — default `cursor.txt`, set via `--cursor-file-path`. The schema hash is likewise a local file under `--sink-info-folder`. Both flags dropped their old `--clickhouse-` prefix and exist only on `substreams sink clickhouse`.
 
 | | Cursor location |
 |---|---|
@@ -162,7 +162,7 @@ WHERE _block_number_ > <last_valid> AND _deleted_ != 1
 
 DDL is create-if-not-exists and **the migration path is an unimplemented stub**: on drift the sink detects the schema-hash change, does nothing, and streams against the old table. No DDL, no error, no warning — then inserts fail with `NO_SUCH_COLUMN_IN_TABLE`.
 
-To change a column: drop the affected tables and re-run `from-proto`, or hosted `ResetDeployment` with `drop_schema: true`. Restarting a "fixed" spkg on its own does nothing.
+To change a column: drop the affected tables and re-run the sink (or `substreams sink clickhouse setup`), or hosted `ResetDeployment` with `drop_schema: true`. Restarting a "fixed" spkg on its own does nothing.
 
 ## Querying
 
@@ -199,13 +199,15 @@ Two ClickHouse-isms worth knowing: window functions are `lagInFrame`/`leadInFram
 ## Connection
 
 ```bash
-substreams-sink-sql from-proto "clickhouse://default:@localhost:9000/default" ./substreams.yaml
+substreams sink clickhouse ./substreams.yaml --dsn "clickhouse://default:@localhost:9000/default"
 ```
+
+The from-proto mode is auto-detected from the output module's proto type — there is no separate `from-proto` command to invoke.
 
 - Native TCP **9000** / **9440** only. **HTTP 8123 / 8443 are hard-rejected.**
 - ClickHouse Cloud: port 9440 + `?secure=true` (without it you get opaque `read: EOF` errors).
 - The DSN port **defaults to 5432 when omitted, even for ClickHouse** — always set it.
-- Smoke tests: `--block-batch-size=1` (default 25). `--batch-block-flush-interval` does **not** exist on `from-proto`.
+- Smoke tests: `--block-batch-size=1` (default 25). `--batch-block-flush-interval` is a Database Changes flag and has no effect in from-proto mode.
 
 ```yaml
 # docker-compose.yml

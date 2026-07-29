@@ -2,7 +2,7 @@
 
 Deep reference for the `DatabaseChanges` mapping mode. See `SKILL.md` for mode selection.
 
-Verified against `substreams-database-change` **4.0.0** and `substreams-sink-sql` **v4.13.1**.
+Verified against `substreams-database-change` **4.0.0** and the built-in SQL sink in `substreams` **v1.20.2**.
 
 ## Engine support
 
@@ -12,7 +12,7 @@ Works on **both** PostgreSQL and ClickHouse, but only PostgreSQL is generally us
 |---|---|---|
 | INSERT | ✅ | ✅ |
 | UPDATE / DELETE / upsert | ✅ | ❌ — `OnlyInserts()=true`, every op becomes an insert |
-| Delta ops (`add`/`sub`/`min`/`max`/`set_if_null`) | ✅ (sink >= v4.12.0) | ❌ |
+| Delta ops (`add`/`sub`/`min`/`max`/`set_if_null`) | ✅ | ❌ |
 | DB-side reorg handling | ✅ | ❌ — `Revert()` errors; history path panics |
 | Duplicate PKs | rejected | allowed (`AllowPkDuplicates()=true`) |
 
@@ -118,7 +118,7 @@ Note: `tables::PrimaryKey` is distinct from the generated proto `pb::...::table_
 
 ## Delta updates
 
-**PostgreSQL only**, sink **>= v4.12.0**, crate **>= 4.0.0** (these methods do not exist in 3.x).
+**PostgreSQL only**, crate **>= 4.0.0** (these methods do not exist in 3.x; on the deprecated standalone binary the sink also had to be >= v4.12.0).
 
 Push aggregation into the database instead of maintaining store modules:
 
@@ -159,7 +159,7 @@ tables.upsert_row("daily_volume", [
 
 ## schema.sql
 
-Applied by `substreams-sink-sql setup`. Keep it minimal — it must tolerate real chain data and the sink's batched, per-table flush order.
+Applied by `substreams sink postgres setup`. Keep it minimal — it must tolerate real chain data and the sink's batched, per-table flush order.
 
 ```sql
 CREATE TABLE IF NOT EXISTS transfers (
@@ -211,7 +211,7 @@ The primary key is a `oneof` — `primary_key: Option<table_change::PrimaryKey>`
 Verify rows land end to end (short ranges need a small flush interval; the default is 1000 blocks):
 
 ```bash
-substreams-sink-sql run "$DSN" ./pkg.spkg 18000000:+100 --batch-block-flush-interval=1
+substreams sink postgres ./pkg.spkg -s 18000000 -t +100 --dsn "$DSN" --batch-block-flush-interval=1
 psql "postgresql://user:pass@localhost:5432/db" -c "SELECT COUNT(*) FROM transfers;"
 ```
 

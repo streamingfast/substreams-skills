@@ -5,8 +5,8 @@ description: >
   to managed infrastructure (PostgreSQL or ClickHouse only) via the Portal API HostedService.
   HARD RULE: before any first-time hosted Deploy (or any "ready to deploy?" prompt), stop and
   offer a substreams run output-quality check as its own turn. For that check, give the user a
-  ready-to-paste substreams run command only (stdout/jsonl) — never substreams-sink-sql, never
-  a local ClickHouse/Postgres sync. Building the module is not enough. SF hosts only the sink
+  ready-to-paste substreams run command only (stdout/jsonl) — never substreams sink postgres /
+  any sink binary, never a local ClickHouse/Postgres sync. Building the module is not enough. SF hosts only the sink
   runner; the user supplies the database. Self-managed sinks: substreams-sink-deploy-local;
   modules: substreams-sql / substreams-dev.
 license: Apache-2.0
@@ -32,7 +32,7 @@ Deploy and operate a Substreams sink on **StreamingFast-hosted** infrastructure 
 
 | ✅ Do this | ❌ Never do this for the quality gate |
 |---|---|
-| Give the user a **ready-to-paste `substreams run`** command | Run **`substreams-sink-sql`** / any sink binary |
+| Give the user a **ready-to-paste `substreams run`** command | Run **`substreams sink postgres`** / any sink binary |
 | Inspect module output on **stdout** (`-o jsonl` or default UI) | **Sync / write** to local or remote **ClickHouse, Postgres, or any DB** |
 | Same **`output_module`** + **network** as the future Deploy | Treat a local sink dry-run as the quality check |
 | Short block range (e.g. `-t +100`) | Open DB credentials, Docker Compose DB, or `substreams-sink-deploy-local` |
@@ -478,7 +478,7 @@ From-proto uses **`CREATE TABLE IF NOT EXISTS`** — it does **not** migrate col
 ## Common Pitfalls
 
 1. **Skipping the output-quality offer** — saying “Ready to proceed to the hosted ClickHouse deployment?” while `OUTPUT_TEST_STATUS` is unset is a **hard failure**. Offer / give a **`substreams run` command** first. Building/publishing is not verification.
-2. **Quality check via local sink** — using `substreams-sink-sql` or writing to local ClickHouse/Postgres “to test” is **wrong** for this gate. Quality check = **`substreams run` only** (command for the user; stdout/jsonl).
+2. **Quality check via local sink** — using `substreams sink postgres` / any sink binary or writing to local ClickHouse/Postgres “to test” is **wrong** for this gate. Quality check = **`substreams run` only** (command for the user; stdout/jsonl).
 3. **Unsupported engine** — hosted SQL is **PostgreSQL or ClickHouse only**. Never accept MySQL, SQLite, BigQuery, etc., or KV/files as the hosted destination; redirect to self-managed skills if needed.
 4. **Assuming StreamingFast provides the database** — it does **not**. StreamingFast hosts only the sink runner; the output DB is **always the user's own**, connected to remotely. `DeployDatabase` attaches/validates that existing connection — it never provisions a database (and its request has no `clickhouse_spec`, so ClickHouse connections are supplied inline in `Deploy`). If the user has no DB, they must stand one up (ClickHouse Cloud, managed Postgres, self-hosted with public DNS) first. Never promise to "provision/host/spin up/create" a database.
 5. **ClickHouse + Database Changes** — not supported. Use From proto definition (custom proto + annotations). Do not set `module_output_type` to `DatabaseChanges` when `outputConfig` is ClickHouse.

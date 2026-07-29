@@ -397,10 +397,10 @@ export DSN="psql://user:pass@localhost:5432/mydb?sslmode=disable"   # not postgr
 
 substreams build
 # setup applies schema.sql + system tables (cursors, …) from the sink: block
-substreams-sink-sql setup "$DSN" ./substreams.yaml
+substreams sink postgres setup ./substreams.yaml --dsn "$DSN"
 
-# run <dsn> <manifest|spkg> [range] — module comes from sink: only (not a trailing CLI arg)
-substreams-sink-sql run "$DSN" ./substreams.yaml "6082465:+1000" \
+# module defaults to sink: module: — pass one after the manifest to override
+substreams sink postgres ./substreams.yaml -s 6082465 -t +1000 --dsn "$DSN" \
   --on-module-hash-mismatch=warn \
   --batch-block-flush-interval=1   # short smoke ranges; default flush is 1000 blocks
 ```
@@ -549,7 +549,7 @@ sink:
 | `entity.save()` on every event | Explicit `create_row` / `update_row` / `upsert_row` in `db_out` (SQL-first). Do **not** route new migrations through `graph_out` |
 | Assuming `update_row` auto-creates | It does **not** — use `upsert_row` or `create_row` when the row may not exist |
 | `ethereum_common@v…` import 404 | Use full URL `https://spkg.io/v1/packages/ethereum-common/v0.3.3` |
-| Module as trailing sink-sql CLI arg | Module comes from `sink:` only; CLI is `setup`/`run <dsn> <manifest\|spkg> [range]` |
+| Old standalone `substreams-sink-sql run <dsn> <manifest>` form | CLI is `substreams sink postgres <manifest> [<module>] --dsn <dsn> [-s/-t]` (no `run`); module defaults to `sink: module:`, and `setup` takes a manifest only |
 | Subgraph grafting (resume from snapshot) | No equivalent in Substreams — `initialBlock` is the only start point. Set it to the contract deployment block; there is no way to resume from a prior subgraph deployment's state. Plan for a full backfill from `initialBlock`. |
 
 ## Testing
@@ -576,4 +576,4 @@ substreams run ./substreams.yaml db_out \
 
 - [Substreams Documentation](https://substreams.streamingfast.io)
 - [substreams-database-change crate](https://github.com/streamingfast/substreams-sink-database-changes)
-- [substreams-sink-sql (Postgres / ClickHouse)](https://github.com/streamingfast/substreams-sink-sql)
+- [SQL sink — built into the substreams CLI](https://github.com/streamingfast/substreams)

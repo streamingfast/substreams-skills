@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.4.0
+  version: 1.5.0
   author: PaulieB14
   documentation: https://github.com/PaulieB14/Bitcoin-Explorer-Substream
 ---
@@ -247,7 +247,7 @@ fn estimate_fee(tx: &Transaction) -> u64 {
 specVersion: v0.1.0
 package:
   name: my-bitcoin-substreams
-  version: 1.4.0
+  version: 1.5.0
   url: https://github.com/user/repo
   description: Bitcoin data processor
 

@@ -11,7 +11,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.4.0
+  version: 1.5.0
   author: StreamingFast
   documentation: https://docs.substreams.dev/how-to-guides/develop-your-own-substreams/solana
 ---
@@ -273,7 +273,7 @@ use pb::mypackage::v1::{MyEvent, MyEvents};
 specVersion: v0.1.0
 package:
   name: my_solana_substreams
-  version: 1.4.0
+  version: 1.5.0
   url: https://github.com/myorg/my-solana-substreams
   description: What this Solana substreams indexes
   # do not add package.doc — write README.md beside the manifest instead

@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Changed
+
+- `substreams-sink-deploy-local`, `substreams-sql`, `substreams-sink`, `substreams-convert`, `substreams-dev`, `substreams-hosted-sink` — the SQL sink is no longer a standalone binary. The `substreams-sink-sql` CLI was folded into the `substreams` CLI ([streamingfast/substreams#830](https://github.com/streamingfast/substreams/pull/830), shipped in **v1.20.2**) and is deprecated. Docs now teach `substreams sink postgres` / `substreams sink clickhouse`:
+  - **No `run` subcommand** — the engine command runs the sink directly (`substreams sink postgres <manifest>`).
+  - **No `create-user`** and **no `from-proto` subcommand** — the mapping mode is auto-detected from the output module's proto type.
+  - `setup` now works in **both** modes: Database Changes applies `schema.sql` + system tables; from-proto derives the schema from the output proto, creates the tables and exits (idempotent).
+  - DSN via `--dsn` / `SUBSTREAMS_SINK_DSN` instead of a positional argument; block range via `-s`/`-t` instead of a positional `<start>:<stop>`.
+  - ClickHouse flags de-prefixed and clickhouse-only (`--cluster`, `--cursor-file-path`, `--sink-info-folder`, `--query-retry-*`); `--metrics-listen-addr` → `--prometheus-addr`; Docker image `ghcr.io/streamingfast/substreams`.
+  - Skills link the upstream [migration guide](https://github.com/streamingfast/substreams/blob/develop/docs/how-to-guides/sinks/sql/migration.md); the T2.3 and T7.1 eval examples carry historical notes.
+
 ## [1.4.0](https://github.com/streamingfast/substreams-skills/releases/tag/v1.4.0)
 
 ### Fixed

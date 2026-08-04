@@ -431,7 +431,7 @@ pub fn store_batch_updates(
 
 Not owned by this skill. The `db_out` module, the `Tables` API from `substreams-database-change`, and Database Changes (CDC, Postgres only) vs From-proto (all ClickHouse) mode selection belong to the **`substreams-sql`** skill.
 
-Worth knowing when designing the graph above: `substreams-sink-sql` supports **delta operations** (`add`, `max`, `min`, …) applied atomically by the database, which can replace store modules for many chain-wide aggregations — no replay from initial block, no read-modify-write, no store dependency. Weigh that against the store patterns above before adding a store.
+Worth knowing when designing the graph above: the SQL sink (`substreams sink postgres`) supports **delta operations** (`add`, `max`, `min`, …) applied atomically by the database, which can replace store modules for many chain-wide aggregations — no replay from initial block, no read-modify-write, no store dependency. Weigh that against the store patterns above before adding a store.
 
 ## Testing
 

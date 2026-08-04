@@ -4,6 +4,8 @@
 **Model:** claude-sonnet-4-6
 **Result:** PASS — sink installed, schema applied, **537/537 rows match golden** · 5 trials, all PASS once known gotchas were patched into the skill
 
+> **Historical note:** this eval ran against the standalone `substreams-sink-sql` v4.13.1 binary, which has since been folded into the `substreams` CLI (v1.20.2+) and deprecated. Commands below are preserved as run. Today the equivalents are `substreams sink postgres setup <manifest> --dsn "$DSN"` and `substreams sink postgres <manifest> -s 18000000 -t +100 --dsn "$DSN" --batch-block-flush-interval=1` — note there is no `run` subcommand. See the [migration guide](https://github.com/streamingfast/substreams/blob/develop/docs/how-to-guides/sinks/sql/migration.md).
+
 ## Goal
 
 Take a built `.spkg` (the T2.3 SQL sink) and deploy it end-to-end:

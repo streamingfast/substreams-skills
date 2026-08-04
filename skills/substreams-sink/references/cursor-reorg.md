@@ -159,7 +159,7 @@ streamPolygon(cursor)   // Using Ethereum's cursor on Polygon!
 
 ## Storage Patterns
 
-> **Note:** The database examples in this section are for illustration purposes. For production sinks targeting PostgreSQL or ClickHouse, we highly recommend using [substreams-sink-sql](https://github.com/streamingfast/substreams-sink-sql) which handles cursor management, reorg handling, batching, and many edge cases out of the box.
+> **Note:** The database examples in this section are for illustration purposes. For production sinks targeting PostgreSQL or ClickHouse, we highly recommend using the built-in SQL sink (`substreams sink postgres` / `substreams sink clickhouse`, part of the [substreams CLI](https://github.com/streamingfast/substreams)) which handles cursor management, reorg handling, batching, and many edge cases out of the box.
 
 ### File-Based (Development)
 

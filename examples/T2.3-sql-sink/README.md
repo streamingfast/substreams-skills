@@ -8,6 +8,8 @@
 
 Take the T1.2 USDC transfers module and add a `db_out` map that emits `sf.substreams.sink.database.v1.DatabaseChanges`, plus a `schema.sql`. Composite primary key on `(tx_hash, log_index)`. Wire it up so `substreams-sink-sql` can consume it.
 
+> **Historical note:** this eval predates the fold-in of `substreams-sink-sql` into the `substreams` CLI (v1.20.2+). The build side below — `db_out`, `schema.sql`, the `sink:` block — is unchanged; only the consuming CLI moved, to `substreams sink postgres`. See [T7.1](../T7.1-sink-sql-deploy/) and the [migration guide](https://github.com/streamingfast/substreams/blob/develop/docs/how-to-guides/sinks/sql/migration.md).
+
 ## Prompt
 
 > I have a Substreams module that produces USDC Transfer events. I want to persist every transfer as a row in Postgres using `substreams-sink-sql`.

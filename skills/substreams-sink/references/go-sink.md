@@ -229,7 +229,7 @@ Why not `os.ReadFile` + `sink.NewCursor(string(data))` / `os.WriteFile`:
 
 ### Database Cursor (Production)
 
-> **Note:** The database examples below are for illustration purposes. For sinking to PostgreSQL or ClickHouse, we highly recommend using [substreams-sink-sql](https://github.com/streamingfast/substreams-sink-sql) which handles cursor management, reorg handling, batching, and many edge cases out of the box.
+> **Note:** The database examples below are for illustration purposes. For sinking to PostgreSQL or ClickHouse, we highly recommend using the built-in SQL sink (`substreams sink postgres` / `substreams sink clickhouse`, part of the [substreams CLI](https://github.com/streamingfast/substreams)) which handles cursor management, reorg handling, batching, and many edge cases out of the box.
 
 ```go
 func loadCursor(db *sql.DB, sinkID string) (*sink.Cursor, error) {

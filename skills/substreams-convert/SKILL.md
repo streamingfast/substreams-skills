@@ -31,7 +31,7 @@ Then hand off decoding and sink detail to the specialist skills — do not re-im
 | EVM logs, Abigen, `logs_with_calls`, topic0 | **`substreams-ethereum`** |
 | Solana `walk_instructions`, IDL/Anchor, SPL | **`substreams-solana`** |
 | `db_out`, Postgres vs ClickHouse, `DatabaseChanges` | **`substreams-sql`** |
-| Self-managed `substreams-sink-sql setup`/`run` | **`substreams-sink-deploy-local`** |
+| Self-managed `substreams sink postgres`/`clickhouse` | **`substreams-sink-deploy-local`** |
 | StreamingFast-hosted SQL sink | **`substreams-hosted-sink`** |
 | EntityChanges / optional `graph_out` | **`substreams-sink`** (not the default greenfield path) |
 

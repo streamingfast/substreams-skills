@@ -12,11 +12,11 @@ metadata:
 
 # Substreams SQL Expert
 
-Build the Substreams **module** that feeds a SQL sink (`substreams-sink-sql`) — PostgreSQL or ClickHouse.
+Build the Substreams **module** that feeds a SQL sink (`substreams sink postgres` / `substreams sink clickhouse`) — PostgreSQL or ClickHouse.
 
 **Scope:** this skill covers module design, proto/schema shape, and mapping mode. For *running* a sink yourself use `substreams-sink-deploy-local`; for StreamingFast-hosted sinks use `substreams-hosted-sink`.
 
-Facts below are verified against `substreams-sink-sql` **v4.13.1** and `substreams-database-change` **4.0.0**.
+Facts below are verified against the built-in SQL sink in `substreams` **v1.20.2** and `substreams-database-change` **4.0.0**. The standalone `substreams-sink-sql` binary (last v4.13.1) is deprecated — same engine, different CLI surface; see the [migration guide](https://github.com/streamingfast/substreams/blob/develop/docs/how-to-guides/sinks/sql/migration.md).
 
 ## Pre-flight: ask before building
 
@@ -26,7 +26,7 @@ Facts below are verified against `substreams-sink-sql` **v4.13.1** and `substrea
 
 | Choice | Product | Destination |
 |---|---|---|
-| **SQL** | [`substreams-sink-sql`](https://github.com/streamingfast/substreams-sink-sql) | PostgreSQL or ClickHouse |
+| **SQL** | built into the [`substreams` CLI](https://github.com/streamingfast/substreams) (`sink postgres` / `sink clickhouse`) | PostgreSQL or ClickHouse |
 | **KV** | [`substreams-sink-kv`](https://github.com/streamingfast/substreams-sink-kv) | Key-value stores |
 | **Files** | [`substreams-sink-files`](https://github.com/streamingfast/substreams-sink-files) | Local FS / S3 / GCS |
 | **Other / custom** | — | Re-route or clarify |
@@ -53,26 +53,28 @@ Ask what the tables must do, *then* derive engine and mode. This is the real con
 
 Chain + contract/protocol · data shape & primary keys · block range (`initialBlock` + test window) · aggregations needed?
 
-## Capability matrix (correct as of v4.13.1)
+## Capability matrix (correct as of substreams v1.20.2)
 
-**Both modes work on both engines** — `ClickhouseDialect` implements the full Database Changes dialect, and `setup`/`run` accept a ClickHouse DSN. The limits are about *capability*, not support:
+**Both modes work on both engines** — `ClickhouseDialect` implements the full Database Changes dialect, and `setup` / the engine command accept a ClickHouse DSN. The limits are about *capability*, not support:
 
 | | PostgreSQL | ClickHouse |
 |---|---|---|
-| **Database Changes** (`setup` + `run`) | Full: INSERT / UPDATE / DELETE / upsert, delta ops, DB-side reorg handling | Runs, but **insert-only** (`OnlyInserts()=true`), **no reorg management**, **no delta ops**, duplicate PKs allowed |
-| **From proto** (`from-proto`) | Insert-only. Identifiers quoted. FK + `child_of` honored | Insert-only. `ReplacingMergeTree(_version_, _deleted_)`. `clickhouse_table_options` **required** |
+| **Database Changes** | Full: INSERT / UPDATE / DELETE / upsert, delta ops, DB-side reorg handling | Runs, but **insert-only** (`OnlyInserts()=true`), **no reorg management**, **no delta ops**, duplicate PKs allowed |
+| **From proto** | Insert-only. Identifiers quoted. FK + `child_of` honored | Insert-only. `ReplacingMergeTree(_version_, _deleted_)`. `clickhouse_table_options` **required** |
 
-**ClickHouse + Database Changes is rarely the right choice** — it is insert-only anyway, so it buys nothing over from-proto while losing schema generation. If you must: `Revert()` returns `"clickhouse driver does not support reorg management"` and the history-table path panics, so you **must** pass `--undo-buffer-size > 0` on `run` (the default `0` enables DB-side reorg handling and will fail).
+The mode is **auto-detected from the output module's proto type** — `sf.substreams.sink.database.v1.DatabaseChanges` selects Database Changes, anything else selects from-proto. There is no `from-proto` subcommand and no mode flag.
+
+**ClickHouse + Database Changes is rarely the right choice** — it is insert-only anyway, so it buys nothing over from-proto while losing schema generation. If you must: `Revert()` returns `"clickhouse driver does not support reorg management"` and the history-table path panics, so you **must** pass `--undo-buffer-size > 0` (the default `0` enables DB-side reorg handling and will fail).
 
 ## Prerequisites
 
 ```bash
-brew install streamingfast/tap/substreams-sink-sql          # 4.13.1
-docker pull ghcr.io/streamingfast/substreams-sink-sql:v4.13.1
+brew install streamingfast/tap/substreams                   # SQL sink included, v1.20.2+
+docker pull ghcr.io/streamingfast/substreams
 ```
-Binaries: [GitHub Releases](https://github.com/streamingfast/substreams-sink-sql/releases).
+Binaries: [GitHub Releases](https://github.com/streamingfast/substreams/releases).
 
-> `substreams-sink-postgres` is the old deprecated name. Use `substreams-sink-sql` — it serves both engines.
+> The SQL sink ships **inside the `substreams` CLI** — `substreams sink postgres` and `substreams sink clickhouse`. The standalone `substreams-sink-sql` binary (and the older `substreams-sink-postgres`) are deprecated.
 
 ### DSN formats
 
@@ -133,7 +135,7 @@ The key argument is `K: Into<PrimaryKey>` — either a single string (`Single`) 
 
 ### Delta updates (aggregations)
 
-Atomic in-DB modification, no read-modify-write. **PostgreSQL only**, requires sink **>= v4.12.0** and crate **>= 4.0.0** (these ops did not exist in 3.x).
+Atomic in-DB modification, no read-modify-write. **PostgreSQL only**, requires crate **>= 4.0.0** (these ops did not exist in 3.x). Present in every built-in sink release; on the deprecated standalone binary it needed **>= v4.12.0**.
 
 ```rust
 tables.upsert_row("aggregates", [("day", day.as_str()), ("token", token.as_str())])
@@ -198,11 +200,12 @@ substreams-database-change = "4"   # 4.0.0; prost 0.13
 
 ```bash
 substreams build
-substreams-sink-sql setup "$DSN" my-substreams-sql-v0.1.0.spkg   # system tables + schema.sql
-substreams-sink-sql run   "$DSN" my-substreams-sql-v0.1.0.spkg
+export SUBSTREAMS_SINK_DSN="$DSN"                                 # or pass --dsn on each command
+substreams sink postgres setup my-substreams-sql-v0.1.0.spkg      # system tables + schema.sql
+substreams sink postgres       my-substreams-sql-v0.1.0.spkg      # runs the sink — no `run` subcommand
 
 # Short smoke ranges won't flush at the default batch size (1000 blocks):
-substreams-sink-sql run "$DSN" ./pkg.spkg 18000000:+100 --batch-block-flush-interval=1
+substreams sink postgres ./pkg.spkg -s 18000000 -t +100 --batch-block-flush-interval=1
 ```
 
 Cursors live in the **`cursors`** table created by `setup` (`--cursors-table`). Resume is automatic.
@@ -259,7 +262,7 @@ Fix: either make `id` the first `order_by_field`, or mark `slot` (the leading so
 
 ### Annotation reference
 
-`clickhouse_table_options` has exactly three fields: **`order_by_fields`** (`{name, descending, function}`, at least one **required**), `partition_fields` (`{name, function}`, defaults to `toYYYYMM(_block_timestamp_)`), and `index_fields`. The `function` enum is `toYYYYMM`, `toYYYYDD`, `toYear`, `toMonth`, `toDate`, `toStartOfMonth` — but ⚠️ in v4.13.1 `toStartOfMonth` is **silently ignored** and `toYYYYDD` emits `toYYYYMMDD`, so stick to `toYYYYMM`. Details in [clickhouse-patterns.md](./references/clickhouse-patterns.md).
+`clickhouse_table_options` has exactly three fields: **`order_by_fields`** (`{name, descending, function}`, at least one **required**), `partition_fields` (`{name, function}`, defaults to `toYYYYMM(_block_timestamp_)`), and `index_fields`. The `function` enum is `toYYYYMM`, `toYYYYDD`, `toYear`, `toMonth`, `toDate`, `toStartOfMonth` — but ⚠️ as of substreams v1.20.2 `toStartOfMonth` is **silently ignored** and `toYYYYDD` emits `toYYYYMMDD`, so stick to `toYYYYMM`. Details in [clickhouse-patterns.md](./references/clickhouse-patterns.md).
 
 `(schema.field)` options: `primary_key`, `foreign_key`, `convertTo`.
 - `convertTo`: `int128{}`, `uint128{}`, `int256{}`, `uint256{}`, `decimal128{scale: N}`, `decimal256{scale: N}` — maps a proto `string` to a wide numeric column.
@@ -295,16 +298,22 @@ modules:
       type: proto:transfers.Output   # your proto — NOT DatabaseChanges
 ```
 
-Without `descriptorSets`, the build cannot resolve `sf/substreams/sink/sql/schema/v1/schema.proto`. A `sink:` block is **optional** for from-proto (the CLI falls back to an empty service).
+Without `descriptorSets`, the build cannot resolve `sf/substreams/sink/sql/schema/v1/schema.proto`. The `sink:` **service config** is optional for from-proto (the CLI falls back to an empty service) — but the sink still has to resolve a module, so either declare `sink: module:` or pass the module as a trailing positional argument.
 
 ### Run
 
 ```bash
-substreams-sink-sql from-proto "$DSN" ./substreams.yaml [output-module]
+# Same command as Database Changes — the mode follows the output module's proto type.
+substreams sink postgres ./substreams.yaml --dsn "$DSN"              # module from sink: module:
+substreams sink postgres ./substreams.yaml map_transfer --dsn "$DSN" # or name it explicitly
+
+# Optional: create the tables ahead of time (idempotent; the sink also does this on startup).
+# `setup` takes a manifest only — it cannot be given a module, so it REQUIRES sink: module:
+substreams sink postgres setup ./substreams.yaml --dsn "$DSN"
 
 # Smoke tests: from-proto batches 25 blocks by default.
-# NOTE: --batch-block-flush-interval does NOT exist here — that flag is `run`-only.
-substreams-sink-sql from-proto "$DSN" ./substreams.yaml --block-batch-size=1
+# NOTE: --batch-block-flush-interval has no effect here — it is a Database Changes flag.
+substreams sink postgres ./substreams.yaml --dsn "$DSN" --block-batch-size=1
 ```
 
 **Cursor storage differs by engine** — the `cursors` table belongs to Database Changes only:
@@ -312,9 +321,9 @@ substreams-sink-sql from-proto "$DSN" ./substreams.yaml --block-batch-size=1
 | Engine | from-proto cursor |
 |---|---|
 | PostgreSQL | auto-created **`_cursor_` table** (no `setup` needed) |
-| ClickHouse | **local file**, default `cursor.txt` (`--clickhouse-cursor-file-path`) |
+| ClickHouse | **local file**, default `cursor.txt` (`--cursor-file-path`) |
 
-⚠️ The ClickHouse cursor is *on disk, not in the database*. Losing the file loses your position. The schema hash is likewise a local file (`--clickhouse-sink-info-folder`).
+⚠️ The ClickHouse cursor is *on disk, not in the database*. Losing the file loses your position. The schema hash is likewise a local file (`--sink-info-folder`). Both flags lost their `--clickhouse-` prefix and exist only on `substreams sink clickhouse`.
 
 ### Reorg handling in from-proto
 
@@ -328,7 +337,7 @@ DDL is `CREATE TABLE IF NOT EXISTS` and **the migration path is an unimplemented
 | Change | Self-managed | Hosted |
 |---|---|---|
 | No column shape change | Redeploy / restart | `UpdateDeploymentConfig` with new `spkg.url` |
-| Rename / add / retype a column | **Drop the tables** and re-run `from-proto` | `ResetDeployment` with `drop_schema: true` |
+| Rename / add / retype a column | **Drop the tables** and re-run the sink (or `setup`) | `ResetDeployment` with `drop_schema: true` |
 
 Symptom of drift: `NO_SUCH_COLUMN_IN_TABLE` after deploying a "fixed" spkg. Drop and recreate — another restart won't help. On ClickHouse, deleting the sink-info folder also silently re-triggers this (`IF NOT EXISTS` no-ops on the existing table).
 
@@ -342,13 +351,13 @@ Symptom of drift: `NO_SUCH_COLUMN_IN_TABLE` after deploying a "fixed" spkg. Drop
 
 **`clickhouse table options not set for table ...`** → stale error text from old docs; the real message names `clickhouse_table_options` as required. Add `order_by_fields`.
 
-**Rows never appear on a short test range** → batching. `run`: `--batch-block-flush-interval=1`. `from-proto`: `--block-batch-size=1`.
+**Rows never appear on a short test range** → batching. Database Changes: `--batch-block-flush-interval=1`. From-proto: `--block-batch-size=1`.
 
 **`invalid scheme postgresql`** → use `psql://` or `postgres://`.
 
 **ClickHouse connection hangs/EOF** → HTTP port. Use 9000/9440; add `?secure=true` on Cloud.
 
-**Delta ops silently not applying** → sink < v4.12.0, crate < 4.0.0, or you're on ClickHouse (Postgres-only).
+**Delta ops silently not applying** → crate < 4.0.0, a standalone binary older than v4.12.0, or you're on ClickHouse (Postgres-only).
 
 ## Anti-patterns
 
@@ -363,6 +372,6 @@ Symptom of drift: `NO_SUCH_COLUMN_IN_TABLE` after deploying a "fixed" spkg. Drop
 
 * [Database Changes reference](./references/database-changes.md) — Rust `Tables` API, delta ops, schema.sql
 * [ClickHouse reference](./references/clickhouse-patterns.md) — from-proto DDL, ORDER BY, MVs
-* [FROM_PROTO guide (upstream)](https://github.com/streamingfast/substreams-sink-sql/blob/develop/FROM_PROTO.md)
+* [Relational mappings / from-proto guide (upstream)](https://github.com/streamingfast/substreams/blob/develop/docs/how-to-guides/sinks/sql/relational-mappings.md)
 * [ClickHouse from-proto showcase](https://github.com/streamingfast/substreams-sink-clickhouse-showcase)
-* [SQL Sink docs](https://docs.substreams.dev/how-to-guides/sinks/sql) · [Discord](https://discord.gg/streamingfast) · [Issues](https://github.com/streamingfast/substreams-sink-sql/issues)
+* [SQL Sink docs](https://docs.substreams.dev/how-to-guides/sinks/sql) · [Migration guide](https://github.com/streamingfast/substreams/blob/develop/docs/how-to-guides/sinks/sql/migration.md) · [Discord](https://discord.gg/streamingfast) · [Issues](https://github.com/streamingfast/substreams/issues)

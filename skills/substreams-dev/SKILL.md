@@ -114,7 +114,7 @@ Before writing code, confirm the items below. If any is missing or ambiguous, **
 | Choice | What it means | Follow-on skill |
 |---|---|---|
 | **`substreams run` only** | Typed protobuf; verify with CLI/GUI first | this skill + chain skill |
-| **SQL — self-managed** | User runs `substreams-sink-sql` into Postgres/ClickHouse | `substreams-sql` → `substreams-sink-deploy-local` |
+| **SQL — self-managed** | User runs `substreams sink postgres`/`clickhouse` into Postgres/ClickHouse | `substreams-sql` → `substreams-sink-deploy-local` |
 | **SQL — StreamingFast hosted** | StreamingFast runs the SQL sink (Portal; Postgres or ClickHouse only) | `substreams-sql` → **`substreams-hosted-sink`** |
 | **The Graph / graph-out** | `EntityChanges` for subgraph consumption | `substreams-sink` |
 | **Custom app sink** | Go/JS/Python/Rust consumer | `substreams-sink` |

@@ -159,7 +159,7 @@ Mentally answer: **Is `OUTPUT_TEST_STATUS` set?**
 - MySQL / MariaDB / SQLite / BigQuery / Snowflake / Redshift / DuckDB / any other SQL dialect
 - `substreams-sink-kv` destinations
 - `substreams-sink-files` / object storage / PubSub / webhooks as the hosted runner target
-- **`GoogleCloudSqlPrivate`** — appears in the `OutputConfig` proto (`portal-api`) for private GCP Cloud SQL networking; **not** part of the standard agent-hosted Postgres/ClickHouse path. Do not invent Cloud SQL private configs unless product docs explicitly enable it for the user's org.
+- **`GoogleCloudSqlPrivate`** — appears in the `OutputConfig` proto (`thegraph-market-api`) for private GCP Cloud SQL networking; **not** part of the standard agent-hosted Postgres/ClickHouse path. Do not invent Cloud SQL private configs unless product docs explicitly enable it for the user's org.
 
 If the user wants KV, files, or a self-managed sink binary, stop and use `substreams-sink-deploy-local` or `substreams-sink` instead. If they need help choosing among SQL / KV / files, use the choice tree in `substreams-sql` (Step 1), then return here only when they commit to hosted **SQL** into Postgres or ClickHouse.
 
@@ -208,17 +208,17 @@ If the user says “deploy to hosted ClickHouse” in one breath, still do **ste
 - Running the sink on their own box → use `substreams-sink-deploy-local`
 - Building the SQL module (`DatabaseChanges` or from-proto annotations) → use `substreams-sql`
 - Writing the Substreams Rust → use `substreams-dev`
-- Only asking about billing/usage/plan → use `portal-api`
+- Only asking about billing/usage/plan → use `thegraph-market-api`
 - Asking for hosted **KV**, **files**, or a non-Postgres/ClickHouse database → explain the hard limit above and redirect
 
-## How This Skill Relates to the Portal Skills
+## How This Skill Relates to the Portal Skill
 
-This skill owns the **sink-deployment workflow**; it does not re-document the API. Lean on:
+This skill owns the **sink-deployment workflow**; it does not re-document the API. Lean on `thegraph-market-api`:
 
-- **`portal-api-jwt`** — authenticate. Hosted deployments are Portal API calls, so you need a Bearer access token. Run the device-code login; the token is pinned to one organization (the user picks it at approval) and carries their role.
-- **`portal-api`** — the authoritative reference for every `HostedService` route, its request/response proto, the enum/state humanization, and the **Mutations Confirmation Protocol**. Read its "Hosted-deployment" sections for exact field shapes; this skill tells you *which* call to make and *how to fill it in* for a sink.
+- **Part 1 (Authentication)** — hosted deployments are Portal API calls, so you need a Bearer access token. Run the device-code login; the token is pinned to one organization (the user picks it at approval) and carries their role.
+- **Part 2 (Calling the API)** — the authoritative reference for every `HostedService` route, its request/response proto, the enum/state humanization, and the **Mutations Confirmation Protocol**. Read its "Hosted-deployment" sections for exact field shapes; this skill tells you *which* call to make and *how to fill it in* for a sink.
 
-> All calls below are `POST {BASE_URL}/sf.portalapi.v1.HostedService/<Method>` with `Authorization: Bearer <access_token>` and an `organization_id` matching the token. `BASE_URL` defaults to `https://admin.streamingfast.io`. **Deploy / scale / reconfigure / undeploy / reset are mutations — confirm with the user first (per the `portal-api` Confirmation Protocol); deploying the hosted sink runner creates billable infrastructure. `DeployDatabase` does not provision a database — it only attaches the user's existing database connection.**
+> All calls below are `POST {BASE_URL}/sf.portalapi.v1.HostedService/<Method>` with `Authorization: Bearer <access_token>` and an `organization_id` matching the token. `BASE_URL` defaults to `https://admin.streamingfast.io`. **Deploy / scale / reconfigure / undeploy / reset are mutations — confirm with the user first (per the `thegraph-market-api` Confirmation Protocol); deploying the hosted sink runner creates billable infrastructure. `DeployDatabase` does not provision a database — it only attaches the user's existing database connection.**
 
 ## Prerequisites
 
@@ -235,7 +235,7 @@ This skill owns the **sink-deployment workflow**; it does not re-document the AP
    - **PostgreSQL + Database Changes:** module emits `proto:sf.substreams.sink.database.v1.DatabaseChanges` (build with `substreams-sql`).
    - **PostgreSQL or ClickHouse + From proto definition:** custom proto (not `DatabaseChanges`); ClickHouse never uses Database Changes. Follow `substreams-sql` for PK/ORDER BY and **ClickHouse reserved column names**.
 2. **No API key to supply** — data-plane key is auto-created per deployment (`Deployment.api_key_id`); separate from Portal Bearer.
-3. **A logged-in session** — Portal access token + pinned `organization_id` (`portal-api-jwt`). Login: **wait for user confirmation** — no background poll (see `portal-api-jwt`).
+3. **A logged-in session** — Portal access token + pinned `organization_id` (`thegraph-market-api` Part 1). Login: **wait for user confirmation** — no background poll (see `thegraph-market-api` Part 1).
 4. **A PostgreSQL or ClickHouse database the user already runs** — StreamingFast never hosts or provisions it. Collect the connection fields **one by one**; `DeployDatabase` only attaches/validates that user-provided connection (it is **not** a provisioning step). Host must be **reachable from StreamingFast’s network** (not laptop `localhost` / Docker-only DNS). If the user has no database yet, they must create one (ClickHouse Cloud, managed Postgres, or self-hosted with public DNS) **before** deploying — do not imply StreamingFast will create it.
 
 ## Pick the Deployment Type
@@ -263,9 +263,9 @@ Publish if needed (`substreams publish`), then set Deploy to a **public HTTPS** 
 
 ### 2. Authenticate
 
-Run `portal-api-jwt` for access token + `organization_id`. Reuse a valid token; refresh rather than re-prompting. Mutations need **OWNER/ADMIN**.
+Run `thegraph-market-api` Part 1 for access token + `organization_id`. Reuse a valid token; refresh rather than re-prompting. Mutations need **OWNER/ADMIN**.
 
-When login is needed: show the login callout **alone**, **end the turn**, and **wait for the user to say they approved**. **Do not** background-poll Portal (or The Graph Market / other browser hand-offs). See `portal-api-jwt` Step 3.
+When login is needed: show the login callout **alone**, **end the turn**, and **wait for the user to say they approved**. **Do not** background-poll Portal (or The Graph Market / other browser hand-offs). See `thegraph-market-api` Part 1, Step 3.
 
 ### 3. Collect database connection (one field per turn)
 
@@ -423,7 +423,7 @@ Notes:
 
 ### 6. Watch it roll out
 
-Poll `GetDeploymentState` until it's healthy; lead with the headline status and per-pod execution detail (state, `current_block`/`head_block`, `head_block_time_drift`). Use `portal-api`'s state humanization (Deploying / Running / Error; Live / Catching up / Failing).
+Poll `GetDeploymentState` until it's healthy; lead with the headline status and per-pod execution detail (state, `current_block`/`head_block`, `head_block_time_drift`). Use `thegraph-market-api`'s state humanization (Deploying / Running / Error; Live / Catching up / Failing).
 
 ```bash
 curl -sS -X POST "$BASE_URL/sf.portalapi.v1.HostedService/GetDeploymentState" \
@@ -470,7 +470,7 @@ From-proto uses **`CREATE TABLE IF NOT EXISTS`** — it does **not** migrate col
 4. User confirms printed output looks good (or explicitly skips after the offer).  
 5. `substreams publish` → bump version on `version_exists`.  
 6. Confirm download: `https://api.substreams.dev/v1/packages/<name>/<version>`.  
-7. Portal login (`portal-api-jwt`) → `CreateDeployment`.  
+7. Portal login (`thegraph-market-api` Part 1) → `CreateDeployment`.  
 8. Secret page on **thegraph.market** (not admin API host).  
 9. Deploy with `spkg.url` + reachable CH host + `use_stored_secret: true`.  
 10. `GetDeploymentState` / `Logs`; on proto schema change → **Reset drop_schema**.
@@ -491,7 +491,7 @@ From-proto uses **`CREATE TABLE IF NOT EXISTS`** — it does **not** migrate col
 12. **Wrong output proto** — a SQL sink whose module doesn't emit `DatabaseChanges` runs in From proto definition mode (tables derived from your proto). If the user expected `db_out`/`DatabaseChanges` on **Postgres**, send them to `substreams-sql` first.
 13. **`organization_id` mismatch** — the Bearer token is pinned to one org; every call's `organization_id` must equal it, or it's rejected. Re-login to target a different org.
 14. **`permission_denied` on a mutation** — the logged-in user isn't OWNER/ADMIN of the org. Reads still work.
-15. **`unauthenticated` mid-session** — the access token expired; refresh via `portal-api-jwt` and retry (don't re-prompt).
+15. **`unauthenticated` mid-session** — the access token expired; refresh via `thegraph-market-api` Part 1 and retry (don't re-prompt).
 16. **spkg not public** — local path or private URL fails. Publish and use API/public HTTPS URL **before** Deploy.
 17. **Background poll during login/password** — forbidden. Wait for user confirmation, then one check (`DeviceToken` / `HasDeploymentSecret`).
 18. **Batched DB questions** — ask host, port, user, database, schema, SSL **one at a time**.
@@ -501,8 +501,7 @@ From-proto uses **`CREATE TABLE IF NOT EXISTS`** — it does **not** migrate col
 
 ## Resources
 
-- `portal-api` — full `HostedService` proto, state enums, confirmation protocol.
-- `portal-api-jwt` — device-code login, token refresh.
+- `thegraph-market-api` — full `HostedService` proto, state enums, confirmation protocol (Part 2), plus device-code login and token refresh (Part 1).
 - `substreams-sql` — build the SQL module (Database Changes on Postgres; From proto definition on Postgres/ClickHouse). Includes the sink-type choice tree (SQL vs KV vs files).
 - `substreams-dev` / `substreams-testing` — data-plane auth and `substreams run` / quality verification before Deploy.
 - `substreams-sink-deploy-local` — run the same sink yourself instead of hosting it.

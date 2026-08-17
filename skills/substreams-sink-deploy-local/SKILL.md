@@ -205,7 +205,7 @@ substreams sink postgres ./pkg.spkg -s 18000000 -t +100 -e "$EP" \
 
 Block range is `-s/--start-block` and `-t/--stop-block`, exactly like `substreams run` (`-t +N` = N blocks past start; omit `-t` for live tail). The old positional `START:STOP` is gone — the only positional range left is `inject-csv`'s.
 
-Auth is **data-plane** auth for the streaming endpoint — not the Portal admin API. A Portal token from `portal-api-jwt` does **not** authenticate this self-managed sink.
+Auth is **data-plane** auth for the streaming endpoint — not the Portal admin API. A Portal token from `thegraph-market-api` does **not** authenticate this self-managed sink.
 
 ### From-proto path (Postgres or ClickHouse)
 

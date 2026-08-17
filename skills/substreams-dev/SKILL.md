@@ -82,7 +82,7 @@ Alternative: `export SUBSTREAMS_API_KEY="…"` (or `SUBSTREAMS_API_TOKEN="<jwt>"
 
 If you send the user to a browser login, treat it like Portal device login: show the link, **end the turn**, and **wait for the user to confirm** — do **not** background-poll or busy-wait.
 
-> **This is data-plane auth, not Portal auth.** `SUBSTREAMS_API_KEY` / `SUBSTREAMS_API_TOKEN` authenticate `substreams run` against the **streaming data endpoints**. The StreamingFast **Portal** admin API (billing, usage, hosted deployments) is separate — see `portal-api` / `portal-api-jwt`. A Portal bearer token will **not** authenticate `substreams run`. Reach for the Portal skills only for plan, quota, usage, or deployment status.
+> **This is data-plane auth, not Portal auth.** `SUBSTREAMS_API_KEY` / `SUBSTREAMS_API_TOKEN` authenticate `substreams run` against the **streaming data endpoints**. The StreamingFast **Portal** admin API (billing, usage, hosted deployments) is separate — see `thegraph-market-api`. A Portal bearer token will **not** authenticate `substreams run`. Reach for that skill only for plan, quota, usage, or deployment status.
 
 ## Pre-flight: Clarifying Under-Specified Requests
 
@@ -225,7 +225,7 @@ substreams publish ./substreams.yaml --yes     # or path to .spkg
 https://api.substreams.dev/v1/packages/<package-name>/<version>
 ```
 
-Verify the URL returns a binary `.spkg` (size ≈ local file), not HTML. Prefer this as `spkg.url` over `substreams_dev_id` alone — some hosted runners mis-parse `substreams-dev://name@version`. Full flow: `substreams-hosted-sink` + `portal-api`.
+Verify the URL returns a binary `.spkg` (size ≈ local file), not HTML. Prefer this as `spkg.url` over `substreams_dev_id` alone — some hosted runners mis-parse `substreams-dev://name@version`. Full flow: `substreams-hosted-sink` + `thegraph-market-api`.
 
 ## Module Types
 

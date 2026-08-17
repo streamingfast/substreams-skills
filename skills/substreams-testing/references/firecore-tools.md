@@ -18,7 +18,7 @@ Firecore tools also accept Firehose token env vars (see `firecore tools firehose
 
 - `FIREHOSE_API_TOKEN` / `FIREHOSE_API_KEY` (names configurable via flags)
 
-This is **not** StreamingFast Portal admin auth (`portal-api-jwt`).
+This is **not** StreamingFast Portal admin auth (`thegraph-market-api`).
 
 ## Commands that matter for testing
 
@@ -132,7 +132,7 @@ Avoid re-hydrating full `Block` structs from Firehose JSON unless you control th
 | Empty fixture file | Check endpoint, block number, and compression flags |
 | Decode errors | Ensure output is raw block protobuf (`-o bytes`), not a JSON wrapper |
 | Wrong chain package | Ethereum fixtures → `substreams_ethereum::pb::eth::v2::Block` |
-| Portal token on Firehose | Use data-plane credentials, not Portal Bearer from `portal-api-jwt` |
+| Portal token on Firehose | Use data-plane credentials, not Portal Bearer from `thegraph-market-api` |
 | Huge fixtures in git | Keep one block; generate ranges in CI cache if needed |
 
 ## Relation to Substreams testing layers

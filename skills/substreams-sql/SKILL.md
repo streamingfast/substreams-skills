@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.5.0
+  version: 1.6.0
   author: StreamingFast
   documentation: https://substreams.streamingfast.io
 ---
@@ -155,7 +155,7 @@ tables.upsert_row("aggregates", [("day", day.as_str()), ("token", token.as_str()
 specVersion: v0.1.0
 package:
   name: my_substreams_sql
-  version: 1.5.0
+  version: 1.6.0
   url: https://github.com/myorg/my-substreams-sql   # set both to avoid build warnings
   description: SQL sink substreams for <protocol>
 

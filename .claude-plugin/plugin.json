@@ -1,7 +1,7 @@
 {
   "name": "substreams",
   "description": "Agent skills for Substreams development — build, debug, and deploy high-performance blockchain data indexing and transformation on EVM, Solana, and NEAR chains.",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "author": {
     "name": "StreamingFast",
     "email": "info@streamingfast.io"

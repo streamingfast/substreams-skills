@@ -66,10 +66,11 @@ Deploy and operate a Substreams sink on StreamingFast-hosted infrastructure — 
 - **Deploy flow** — public `.spkg` URL, attach the **user's** Postgres/ClickHouse connection (`DeployDatabase` for Postgres attach/validate only — SF never provisions a DB), secret page for password, then `Deploy` (data-plane `api_key_id` is auto-created)
 - **Rollout & monitoring** — `GetDeploymentState` head block / lag, events, logs
 - **Operate** — scale/pause (`SetReplica`), reconfigure (`UpdateDeploymentConfig`), reset and tear down — with confirmation on destructive actions
-- **Auth** — device-code login via `portal-api-jwt`; endpoint reference in `portal-api`
+- **Auth** — device-code login and endpoint reference both in `thegraph-market-api`
 
-### ✅ Portal API (`portal-api`)
-Lets the assistant act on a StreamingFast Portal account by calling the Portal API directly — answering plain-language billing/usage/load questions **and** managing the full hosted-deployment lifecycle. The user does not have to write code — they just ask:
+### ✅ The Graph Market API (`thegraph-market-api`)
+Lets the assistant log in to and act on a user's StreamingFast Portal / The Graph Market account by calling the Portal API directly — answering plain-language billing/usage/load questions **and** managing the full hosted-deployment lifecycle. The user does not have to write code or manage tokens — they just ask:
+- "Log me in / connect my account."
 - "What's our current subscription?"
 - "What's our usage this month / for API key X / over the last 30 days?"
 - "Which service is driving most of our usage?"
@@ -79,10 +80,9 @@ Lets the assistant act on a StreamingFast Portal account by calling the Portal A
 - "Is my sink running / what's its head block and lag?"
 - "Deploy this spkg / scale my sink to 3 replicas / undeploy X."
 
-The skill covers six read-only billing/usage endpoints (`GetOrganizationSubscription`, `GetBillingDetails`, `GetUsageBilling`, `MultiServiceUsageSummaryByOrganization`, `UsageByOrganization`, `ActiveConnections`) plus the full `HostedService` surface (list/status/events/logs reads and deploy/scale/undeploy/reset/reconfigure mutations, the latter gated behind an explicit confirmation protocol). It documents how to authenticate via the `portal-api-jwt` device-code login (a short-lived `Authorization: Bearer` token), how to manage that session, a conversational playbook mapping common questions to endpoints, and a plan-change advice rubric. Proto fragments are inlined snapshots of the upstream API; when a call returns `invalid_argument` or a documented field is missing, treat the skill as potentially out of date and tell the user (there is no automatic schema-drift fetch).
+**Part 1 (Authentication)** runs the OAuth 2.0 Device Authorization Grant (RFC 8628): the agent starts a device-code login, hands the user a URL + code to approve in their browser, **waits for the user to confirm they approved** (no background poll), then fetches a short-lived org-scoped access token plus a rotating refresh token. Covers the full flow — start, user confirmation, capture, call, and refresh-with-rotation — plus token lifetimes and secret-handling rules. (This is **Portal** admin auth only; streaming `substreams run` / sink auth is the separate `substreams auth` flow.)
 
-### ✅ Portal API Auth (`portal-api-jwt`)
-The interactive-login front-end for `portal-api` and the standard way to authenticate to the Portal API. Runs the OAuth 2.0 Device Authorization Grant (RFC 8628): the agent starts a device-code login, hands the user a URL + code to approve in their browser, **waits for the user to confirm they approved** (no background poll), then fetches a short-lived org-scoped access token plus a rotating refresh token. The result is an `Authorization: Bearer <token>` the `portal-api` skill sends on every call. Covers the full flow — start, user confirmation, capture, call, and refresh-with-rotation — plus token lifetimes and the secret-handling rules. (This is **Portal** admin auth only; streaming `substreams run` / sink auth is the separate `substreams auth` flow.)
+**Part 2 (Calling the API)** covers six read-only billing/usage endpoints (`GetOrganizationSubscription`, `GetBillingDetails`, `GetUsageBilling`, `MultiServiceUsageSummaryByOrganization`, `UsageByOrganization`, `ActiveConnections`) plus the full `HostedService` surface (list/status/events/logs reads and deploy/scale/undeploy/reset/reconfigure mutations, the latter gated behind an explicit confirmation protocol). Documents how to manage the token session (refresh on expiry, never re-prompt), a conversational playbook mapping common questions to endpoints, and a plan-change advice rubric. Proto fragments are inlined snapshots of the upstream API; when a call returns `invalid_argument` or a documented field is missing, treat the skill as potentially out of date and tell the user (there is no automatic schema-drift fetch).
 
 ### ✅ Substreams Testing (`substreams-testing`)
 Expert knowledge for testing Substreams applications at all levels. Complete testing strategy:
@@ -111,8 +111,7 @@ Validate that everything works properly by running `/skills` within `claude`, se
 ...
 
 Plugin skills (plugin)
-portal-api · ~70 description tokens
-portal-api-jwt · ~75 description tokens
+thegraph-market-api · ~110 description tokens
 substreams-dev · ~58 description tokens
 substreams-ethereum · ~70 description tokens
 substreams-solana · ~70 description tokens
@@ -167,9 +166,7 @@ substreams-skills/
 ├── .claude-plugin/
 │   └── plugin.json          # Plugin metadata
 └── skills/
-    ├── portal-api/
-    │   └── SKILL.md
-    ├── portal-api-jwt/
+    ├── thegraph-market-api/
     │   └── SKILL.md
     ├── substreams-dev/
     │   ├── SKILL.md          # Cross-cutting (manifest, modules, perf)

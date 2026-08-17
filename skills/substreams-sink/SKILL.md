@@ -21,7 +21,7 @@ Expert assistant for consuming Substreams data - building production-grade sinks
 | **Custom app sink** (Go / JS / Python / Rust SDK consumer) | **this skill** (`substreams-sink`) |
 | **SQL module** (`db_out` / DatabaseChanges / From-proto) | `substreams-sql` |
 | **Run the sink yourself** (CLI, schema, ops on your infra) | `substreams-sink-deploy-local` |
-| **StreamingFast hosts the sink** (Portal HostedService) | `substreams-hosted-sink` (+ `portal-api`) |
+| **StreamingFast hosts the sink** (Portal HostedService) | `substreams-hosted-sink` (+ `thegraph-market-api`) |
 | **graph_out / EntityChanges module** (produce entities) | this skill (inline proto) + `substreams-dev` |
 
 Prefer existing sink CLIs (the built-in SQL sink — `substreams sink postgres` / `substreams sink clickhouse` —, files, kv) over a hand-rolled consumer when they already cover the destination.
@@ -77,7 +77,7 @@ export SUBSTREAMS_API_TOKEN=<your-jwt-token>
 
 The `substreams auth` command handles token exchange and local storage automatically.
 
-> **Note — this is data-plane auth, not Portal auth.** `SUBSTREAMS_API_KEY` / `SUBSTREAMS_API_TOKEN` authenticate the sink against the **streaming data endpoints**. They are separate from the StreamingFast **Portal** admin API (billing, usage, hosted deployments), which the `portal-api` and `portal-api-jwt` skills cover. A Portal device-code/Bearer token from `portal-api-jwt` is scoped to Portal routes only and will **not** authenticate a sink — use the `substreams auth` flow here.
+> **Note — this is data-plane auth, not Portal auth.** `SUBSTREAMS_API_KEY` / `SUBSTREAMS_API_TOKEN` authenticate the sink against the **streaming data endpoints**. They are separate from the StreamingFast **Portal** admin API (billing, usage, hosted deployments), which the `thegraph-market-api` skill covers. A Portal device-code/Bearer token from that skill is scoped to Portal routes only and will **not** authenticate a sink — use the `substreams auth` flow here.
 
 ## Sink Output Types — Pick the Right Proto FIRST
 

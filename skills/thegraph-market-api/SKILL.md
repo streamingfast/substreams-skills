@@ -1,25 +1,302 @@
 ---
-name: portal-api
-description: Answer questions and take action on a user's StreamingFast Portal account — billing, subscription, usage, live load, and the full hosted-deployment lifecycle — by calling the Portal API directly. Billing/usage routes are read-only; the hosted-deployment routes cover both reads (list/status/events/logs) and mutations (deploy, scale replicas, undeploy, reset, reconfigure). Use when the user asks things like "what's our current plan", "what was our usage last month", "who's connected right now", "is my sink running", "list my deployments", "deploy this spkg", "scale my sink to 3 replicas", or "undeploy X". The skill tells the assistant how to authenticate, which endpoint to call, when to confirm destructive actions, and how to summarize the result in plain language.
+name: thegraph-market-api
+description: Authenticate to and call The Graph Market API (StreamingFast Portal) on the user's behalf — log in via device-code flow, then answer billing/subscription/usage/live-load questions and run the full hosted-deployment lifecycle. Use when the agent has no access token and needs the user to log in interactively (e.g. "connect my account", "log me in", "I don't have an API key", or a call returns 401/unauthenticated), and for natural-language requests like "what's our current plan", "what was our usage last month", "who's connected right now", "is my sink running", "list my deployments", "deploy this spkg", "scale my sink to 3 replicas", or "undeploy X". Billing/usage routes are read-only; hosted-deployment routes cover both reads (list/status/events/logs) and mutations (deploy, scale replicas, undeploy, reset, reconfigure). Tells the assistant how to authenticate, which endpoint to call, when to confirm destructive actions, and how to summarize the result in plain language.
 license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.5.0
+  version: 1.0.0
   author: StreamingFast
   documentation: https://docs.substreams.dev
 ---
 
-# StreamingFast Portal API — Conversational Billing, Usage & Hosted-Deployment Skill
+# The Graph Market API — Authentication, Billing, Usage & Hosted-Deployment Skill
 
-This skill lets the assistant act on an organization's StreamingFast Portal account by calling the Portal API directly — answering billing/usage/load questions **and** managing the full hosted-deployment lifecycle (deploy, scale, undeploy, reset, reconfigure). The user is **not** expected to write code against this API. The assistant is.
+This skill lets the assistant act on a user's [The Graph Market](https://thegraph.market) (StreamingFast Portal) account: it logs the user in via an interactive device-code flow, then calls the Portal API directly to answer billing/usage/load questions **and** manage the full hosted-deployment lifecycle (deploy, scale, undeploy, reset, reconfigure). The user is **not** expected to write code against this API or manage tokens themselves. The assistant is.
+
+The API's wire-level namespace (`sf.portalapi.v1`) still says "portal" — that's the backend's internal name and is unrelated to this skill's name; don't rename it in requests.
 
 Two safety tiers:
 
 - **Read routes** (all billing/usage/load + deployment list/status/events/logs) — call freely and summarize.
 - **Mutating routes** (deploy, set replica, undeploy, reset, update/delete config, deploy database, cleanup) — these change live infrastructure and may incur cost or destroy data. **Confirm with the user before calling**, echoing back exactly what will happen. Treat `ResetDeployment` (drops/truncates the database), `Undeploy`, `DeleteDeploymentConfig`, and `CleanupOrphanedDeployment` as destructive and irreversible. See "Mutations — Confirmation Protocol" below.
 
-## When This Skill Applies
+## Part 1 — Authentication (Device-Code Login & Token Refresh)
+
+This section teaches the assistant to get a Portal **access token** by sending the
+user through an interactive browser login, then keep that token fresh. It is the
+authentication front-end for Part 2 below: once you hold an access token, you call
+Portal API methods exactly as that section describes, with
+`Authorization: Bearer <access_token>`.
+
+This is the standard way to authenticate to the Portal API. Use it whenever you
+need to call Portal routes and don't already hold a valid access token — the
+first time, or when an existing token has expired and must be renewed.
+
+### The Flow at a Glance (RFC 8628 Device Authorization Grant)
+
+1. **Start** — `POST DeviceAuthorize`. Get a `user_code`, a `verification_uri`, and a secret `device_code`.
+2. **Hand off to the user** — show them the URL + `user_code` and **stop**. Ask them to approve in their browser and **tell you when done**.
+3. **Wait for user confirmation** — do **not** background-poll `DeviceToken` while they are away. No sleep loops, no background tasks, no “I'll poll until you approve.”
+4. **After the user confirms** — call `POST DeviceToken` once with the `device_code`. If still `PENDING`, say so and wait for them again (or one short retry only after they re-confirm) — never a continuous poll loop.
+5. **Receive tokens** — on approval you get an `access_token` (short-lived) and a `refresh_token` (longer-lived).
+6. **Call the API** — use `Authorization: Bearer <access_token>` on Portal API calls.
+7. **Refresh** — when the access token nears/passes expiry, `POST RefreshToken` to get a new pair. Never re-prompt the user until the refresh token itself expires or is revoked.
+
+The agent **never** calls the approval endpoint — that happens in the user's
+browser. The agent only calls `DeviceAuthorize`, `DeviceToken`, and `RefreshToken`,
+all of which are **public** (no auth header needed).
+
+### Setup
+
+| Var | Default | Notes |
+|---|---|---|
+| `BASE_URL` | `https://admin.streamingfast.io` | User says "local"/"localhost" → `http://localhost:9000`. Other host → use as-is. |
+
+All three endpoints are `POST` of a JSON body to `{BASE_URL}/sf.portalapi.v1.PortalApi/<Method>`.
+Requests accept either casing (prefer **snake_case**); **responses are camelCase**.
+`int64` fields (`expiresIn`, `interval`) come back as **JSON strings** — coerce before
+doing math on them. Enum values are full strings (e.g. `"DEVICE_TOKEN_STATUS_APPROVED"`).
+Call with the Bash tool + `curl`, pipe through `jq`.
+
+### Step 1 — Start the login
+
+```bash
+curl -sS -X POST "$BASE_URL/sf.portalapi.v1.PortalApi/DeviceAuthorize" \
+  -H "Content-Type: application/json" \
+  -d '{"client_name": "Claude agent"}'
+```
+
+Response — production sends **camelCase only**, and the `int64` fields
+(`expiresIn`, `interval`) arrive as **JSON strings**, not numbers:
+
+```json
+{
+  "deviceCode": "device_9f8c…",
+  "userCode": "BCDF-GH2J",
+  "verificationUri": "https://thegraph.market/device",
+  "verificationUriComplete": "https://thegraph.market/device?user_code=BCDF-GH2J",
+  "expiresIn": "600",
+  "interval": "5"
+}
+```
+
+Read camelCase, but tolerate snake_case (`device_code`, `expires_in`, …) in case a
+deployment emits it. Coerce `expiresIn` / `interval` with `Number(...)` / `int(...)`
+before any arithmetic or comparison — they are strings on the wire.
+
+Keep `deviceCode`, `interval`, and `expiresIn` in memory.
+**Do not print the `deviceCode`** — it is the agent's secret half of the handshake.
+Use `verificationUriComplete` as returned; production points at
+**thegraph.market**, not admin.streamingfast.io.
+
+### Step 2 — Send the user to approve
+
+This message is easy to lose in a wall of text — make it **stand out**. Output the
+callout **exactly as the template below** — do not reword it, flatten it into a
+sentence, or drop the heading or blockquote. Substitute only the `{...}`
+placeholders; keep every line, both `###` headings, the `>` blockquote bar (the
+terminal draws a colored rule), and the emojis verbatim. The URL must stay on its
+own line as **bare text in the blockquote** (never inside backticks or a fenced
+code block) so the terminal renders it as a clickable blue link. Show the link
+**once** — do not repeat it as a manual-entry fallback.
+
+Make this a **focused, blocking ask**: the login is a clear gate, so the callout
+should be the only thing in the turn. **Do not** pair it with narration about other
+work happening "in parallel" or "meanwhile" (e.g. "Let me start the login and, in
+parallel, inspect the spkg") — splitting the user's attention between an action they
+must take and background agent work is confusing. **Do not** start a background
+`DeviceToken` poll, sleep loop, or subagent while waiting. Hold all other work until
+**after** the user confirms they approved and you have tokens.
+
+Emit this and nothing else for the prompt:
+
+> ### 🔓 Log in to approve access
+>
+> ⏳ **Expires in 10 minutes** — I'll wait for you; I won't poll in the background.
+>
+> **1.** Open this link:
+>
+> {verification_uri_complete}
+>
+> **2.** Sign in
+> **3.** Choose the organization to grant
+> **4.** Click Approve ✅
+>
+> ### 👉 Tell me once you've approved — only then will I fetch the token.
+
+Prefer `verification_uri_complete` (one click, code pre-filled). The user selects
+which organization the agent may act on and the token inherits **their role** in
+that org.
+
+### Step 3 — After the user confirms (no background poll)
+
+**Hard rule:** never run a continuous or background poll for login approval (no
+`while true` + sleep, no background shell, no “I'll keep checking”). The turn that
+shows the login link must **end**. Resume only when the user says they approved
+(or equivalent confirmation).
+
+Only **after** that confirmation, call `DeviceToken` once:
+
+```bash
+curl -sS -X POST "$BASE_URL/sf.portalapi.v1.PortalApi/DeviceToken" \
+  -H "Content-Type: application/json" \
+  -d '{"device_code": "device_9f8c…"}'
+```
+
+On success the call returns HTTP 200 with a `status` field:
+
+| `status` | Meaning | Action |
+|---|---|---|
+| `DEVICE_TOKEN_STATUS_PENDING` | Not approved yet | Tell the user it isn't registered yet; ask them to finish Approve and **tell you again** — do **not** enter a sleep/poll loop |
+| `DEVICE_TOKEN_STATUS_SLOW_DOWN` | Called again within `interval` seconds | **Not a failure, and not the real status** — see below |
+| `DEVICE_TOKEN_STATUS_DENIED` | User denied | Stop; tell the user access was denied |
+| `DEVICE_TOKEN_STATUS_EXPIRED` | Handshake timed out | Stop; restart at Step 1 |
+| `DEVICE_TOKEN_STATUS_APPROVED` | Done | Capture the tokens (below) |
+
+**`SLOW_DOWN` masks the real status.** The server rate-limits per device code at one
+call per `interval` (~5s): a second call inside that window returns `SLOW_DOWN`
+*instead of* the true state, and each early call keeps the limiter engaged. So an
+approved login can still read `SLOW_DOWN`. Never treat it as "not approved" — it means
+"you asked too soon". Let at least `interval` seconds of real time pass (i.e. wait for
+the user's next message; do **not** sleep-loop), then call once more.
+
+A code that has aged out is still a **200** carrying `DEVICE_TOKEN_STATUS_EXPIRED` —
+the server keeps it and reports it properly, so you get a clear "restart at Step 1"
+signal rather than an error.
+
+Errors are a separate channel: HTTP 4xx with a Connect error body, no `status` field.
+A device code the server never issued returns **HTTP 400**:
+
+```json
+{"code":"invalid_argument","message":"unknown device code","details":[…]}
+```
+
+In practice that means a corrupted or hallucinated `device_code`, not an expired one.
+Check the HTTP code first and only read `.status` on a 200.
+
+On `APPROVED` (camelCase on the wire; `expiresIn` is an `int64` → **JSON string**):
+
+```json
+{
+  "status": "DEVICE_TOKEN_STATUS_APPROVED",
+  "accessToken": "eyJ…",
+  "refreshToken": "agentrt_…",
+  "expiresIn": "900",
+  "organizationId": "0cyje0…"
+}
+```
+
+**Capture `organizationId`** — it is the org the user approved, and the **only**
+place you learn it. Send that value back as `organization_id` (snake_case, in the
+**request** body) on every Portal API call (Step 4). Don't guess it.
+
+The `device_code` is **single-use** — once approved and the tokens are returned,
+calling again fails. Stop.
+
+Do **not** use the waiting period for unannounced background prep that looks like
+parallel work; finish login first, then gather connection details / spkg URLs.
+
+### Step 4 — Call the Portal API with the access token
+
+Use the methods documented in Part 2 below, swapping the auth header:
+
+```bash
+curl -sS -X POST "$BASE_URL/sf.portalapi.v1.HostedService/ListDeployments" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"organization_id": "<ORG_ID>"}'
+```
+
+Scope rules baked into the token:
+
+- The token is pinned to **one organization**. Every request's `organization_id`
+  **must match** the org the user approved, or the call is rejected
+  (`permission_denied` / "unauthorized"). You don't choose the org per call — it
+  was fixed at approval. Use the `organization_id` from the approved token response
+  (Step 3); to act on a different org, have the user re-run the login.
+- The token carries the user's **role** in that org; you can only do what that
+  user could do (reads for any member; deploy/scale/undeploy need OWNER/ADMIN).
+- Agent tokens may only call the org-scoped, allowlisted routes — the billing/
+  usage routes and the full HostedService.
+
+### Step 5 — Refresh before/after expiry
+
+When the access token is near expiry (or a call returns unauthenticated), renew
+**without** re-prompting the user:
+
+```bash
+curl -sS -X POST "$BASE_URL/sf.portalapi.v1.PortalApi/RefreshToken" \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "agentrt_…"}'
+```
+
+Response — a **new** access token **and a new refresh token**:
+
+```json
+{
+  "accessToken": "eyJ…",
+  "refreshToken": "agentrt_…NEW",
+  "expiresIn": "900"
+}
+```
+
+**Critical — refresh tokens are one-time-use (rotated):**
+
+- Each refresh **invalidates the refresh token you just sent** and returns a new
+  one. **Always replace your stored refresh token with the new value.**
+- **Never reuse an old refresh token.** Presenting an already-rotated token is
+  treated as theft and **revokes the entire token family** — you'll have to send
+  the user through the login again.
+- The refresh token has an **absolute lifetime** (~8h) that does **not** extend on
+  rotation. When it finally expires, refresh fails — restart at Step 1.
+- A refresh re-checks the user's live role/membership. If they were removed from
+  the org or lost access, refresh fails — restart the login.
+
+A refresh token that is expired, revoked, already-rotated, or unknown fails the same
+way — **HTTP 401**, with no distinguishing detail:
+
+```json
+{"code":"unauthenticated","message":"unauthenticated"}
+```
+
+You cannot tell those cases apart from the response, so treat any `RefreshToken`
+failure identically: discard both tokens and begin a fresh device-code login (Step 1).
+Do not retry the refresh — the same token will keep failing.
+
+### Token Lifetimes (defaults; deployment may tune)
+
+| Token | Lifetime | Notes |
+|---|---|---|
+| Device-code handshake | ~10 min | `expires_in` from `DeviceAuthorize`; user must approve before it elapses |
+| Access token | ~15 min | Short-lived, stateless Bearer JWT |
+| Refresh token | ~8 h absolute | Rotated on every use; absolute deadline survives rotation |
+
+### Quick Reference — Endpoints (all public, no auth)
+
+```
+POST {BASE_URL}/sf.portalapi.v1.PortalApi/DeviceAuthorize   {"client_name"?: string}
+POST {BASE_URL}/sf.portalapi.v1.PortalApi/DeviceToken       {"device_code": string}
+POST {BASE_URL}/sf.portalapi.v1.PortalApi/RefreshToken      {"refresh_token": string}
+```
+
+Then call any allowlisted Portal API / HostedService method with
+`Authorization: Bearer <access_token>` and a matching `organization_id`.
+
+### Handling Notes
+
+- Treat `access_token` and `refresh_token` as secrets; never echo them to the user.
+- Show the user only the `verification_uri`(`_complete`) and `user_code`.
+- **Never background-poll** for device approval; wait for the user to confirm first.
+- Respect `interval` if you must retry `DeviceToken` after a user re-confirmation; back off further on `SLOW_DOWN`.
+- Once you hold a token, move to Part 2 below for the actual calls; come back
+  here only to refresh or re-login.
+
+## Part 2 — Calling the API
+
+By this point the assistant holds an access token from Part 1. This part is the reference for the billing/usage/load reads and the full hosted-deployment lifecycle (deploy, scale, undeploy, reset, reconfigure).
+
+### When This Skill Applies
 
 Trigger on natural-language questions about portal state, for example:
 
@@ -39,11 +316,11 @@ Trigger on natural-language questions about portal state, for example:
 
 If the user asks about anything outside billing / subscription / usage / live-load / hosted deployments, this skill is not the right one — defer. Read questions are answered directly; mutating actions require explicit confirmation first (see "Mutations — Confirmation Protocol").
 
-## First-Run Setup
+### First-Run Setup
 
 `BASE_URL` — default `https://admin.streamingfast.io`; if the user says "local" / "localhost" → `http://localhost:9000`; another host → use as-is. Assume the default; do not ask.
 
-Authentication is the device-code login flow documented in the [`portal-api-jwt`](../portal-api-jwt/SKILL.md) skill. Run it whenever you don't already hold a valid access token. It does **not** yield a static credential — it yields a **session**. Hold these **in memory** for the session; do not write to disk uninvited:
+Authentication is the device-code login flow documented in Part 1 above. Run it whenever you don't already hold a valid access token. It does **not** yield a static credential — it yields a **session**. Hold these **in memory** for the session; do not write to disk uninvited:
 
 | Item | What it is | Lifecycle |
 |---|---|---|
@@ -51,24 +328,24 @@ Authentication is the device-code login flow documented in the [`portal-api-jwt`
 | `refresh_token` | Renews the access token without re-prompting the user. | **Rotated on every use** — each refresh returns a new one; store it and discard the old. ~8 h absolute cap. |
 | `ORG_ID` | The org is **fixed at login** (the user picks it during approval). | Don't ask for it separately; every call's `organization_id` must equal it. |
 
-### Managing the session
+#### Managing the session
 
 Cache `access_token`, `refresh_token`, and the pinned `ORG_ID` in memory for the session. Then:
 
-- **Refresh on expiry, don't re-prompt.** When the access token nears expiry *or* any call returns `unauthenticated`, call `RefreshToken` (per `portal-api-jwt` Step 5) to get a new access token, then retry the call.
+- **Refresh on expiry, don't re-prompt.** When the access token nears expiry *or* any call returns `unauthenticated`, call `RefreshToken` (per Part 1, Step 5) to get a new access token, then retry the call.
 - **Always replace the stored refresh token** with the one the refresh returns. **Never reuse a rotated refresh token** — replaying an old one revokes the whole token family and forces a fresh login.
 - **When refresh fails** (refresh token hit its ~8 h cap, was revoked, or the user lost org access), discard both tokens and re-run the device-code login from Step 1.
-- See `portal-api-jwt` for the full flow, lifetimes, and rotation rules.
+- See Part 1 for the full flow, lifetimes, and rotation rules.
 
-### Starting a login
+#### Starting a login
 
-If an unexpired access token is already available (prior context or a prior `portal-api-jwt` login), use it — don't re-ask. Otherwise tell the user you'll log them in, then run the `portal-api-jwt` flow:
+If an unexpired access token is already available (prior context or a prior login this session), use it — don't re-ask. Otherwise tell the user you'll log them in, then run the Part 1 flow:
 
 > "To do that I'll connect to your StreamingFast Portal account. I'll start an interactive browser login — you'll get a link and a short code to approve, and you'll choose which organization to grant access to. Ready when you are."
 
 Never echo the access token or refresh token back in full; redact to the last 4 characters.
 
-## How the Assistant Makes a Call
+### How the Assistant Makes a Call
 
 Every Portal API method is a `POST` of a JSON body to `{BASE_URL}/{Service}/{Method}`, where `{Service}` is `sf.portalapi.v1.PortalApi` for the six billing/usage routes and `sf.portalapi.v1.HostedService` for the hosted-deployment routes. The assistant invokes via the Bash tool with `curl`:
 
@@ -87,7 +364,7 @@ curl -sS -X POST "$BASE_URL/sf.portalapi.v1.HostedService/<METHOD>" \
 
 Pipe through `jq` to extract only the fields needed for the answer. Never dump raw JSON at the user unless they explicitly ask.
 
-`$ACCESS_TOKEN` is the Bearer token from the [`portal-api-jwt`](../portal-api-jwt/SKILL.md) login (see First-Run Setup). If a call returns `unauthenticated`, the token has likely expired — refresh it per that skill and retry; don't re-prompt the user.
+`$ACCESS_TOKEN` is the Bearer token from the Part 1 login (see First-Run Setup). If a call returns `unauthenticated`, the token has likely expired — refresh it per Part 1 and retry; don't re-prompt the user.
 
 JSON wire form follows proto3 JSON mapping in **requests** (prefer **snake_case** field names). **Responses often use camelCase** (`deploymentId`, `organizationId`, `accessToken`, `exists`, `planName`, `substreamsConfig`, …). When parsing, accept **both** casings. Enum values are full strings (e.g. `"DATE_FILTER_CURRENT_MONTH"`, `"DEVICE_TOKEN_STATUS_APPROVED"`).
 
@@ -99,11 +376,11 @@ JSON wire form follows proto3 JSON mapping in **requests** (prefer **snake_case*
 - **Unknown request fields are silently ignored — they do NOT error.** The server decodes with `DiscardUnknown`, so a misspelled or removed field (e.g. `storage_class`, `sink_config`, `replicas` instead of `replica`) is dropped and the call still returns `200` / `success: true`. A typo therefore surfaces as *the setting didn't take effect*, never as `invalid_argument`. Spell field names exactly as the proto above; when a deployed config doesn't match what you sent, suspect a dropped field first. Enum fields are still validated — an invalid enum *value* does error.
 - **Requests accept snake_case or camelCase**, but **responses are camelCase only** (no snake_case duplicates). Prefer snake_case in requests; always read camelCase in responses.
 
-## The Endpoints — Inline Proto
+### The Endpoints — Inline Proto
 
 Six billing/usage routes on `PortalApi` (read-only) plus the full `HostedService` surface (reads + mutations). Only the messages used by these routes are documented here. Unrelated `PortalApi` RPCs (key/org/payment management) remain out of scope.
 
-### Service
+#### Service
 
 ```proto
 service PortalApi {
@@ -149,7 +426,7 @@ service HostedService {
 }
 ```
 
-### Request messages
+#### Request messages
 
 ```proto
 message GetOrganizationSubscriptionRequest         { string organization_id = 1; }
@@ -176,7 +453,7 @@ message Filter {
 }
 ```
 
-### Hosted-deployment request messages — reads
+#### Hosted-deployment request messages — reads
 
 ```proto
 message ListDeploymentsRequest    { string organization_id = 1; }
@@ -211,7 +488,7 @@ message HasDeploymentSecretResponse { bool exists = 1; }
 
 `deployment_id` comes from a prior `ListDeployments` call. `organization_id` is the same org ID used for the billing routes.
 
-### Hosted-deployment request messages — mutations (confirm first)
+#### Hosted-deployment request messages — mutations (confirm first)
 
 ```proto
 // CreateDeployment mints a fresh, unique deployment_id (server-generated —
@@ -280,7 +557,7 @@ message DeployDatabaseRequest {        // attach/validate the user's existing Po
 }
 ```
 
-### Imported `sf.hosted.common.v1` payload types (for Deploy / UpdateDeploymentConfig)
+#### Imported `sf.hosted.common.v1` payload types (for Deploy / UpdateDeploymentConfig)
 
 ```proto
 message DeploymentRequest {            // note: distinct from the portalapi wrapper above
@@ -366,7 +643,7 @@ message GoogleCloudSqlPrivate { string instance_connection_name = 1; uint64 port
 
 `password` fields are secrets. **Do not ask the user to paste a database password into the chat, and never put one in a request you compose** — anything you receive lands in the transcript. Instead route the password through the stored-secret flow (see "Provide the database password" below): the user enters it once in the Portal web UI, and you deploy with `use_stored_secret: true` and an empty `password`. If a user volunteers a password anyway, decline to embed it, tell them why, and point them at the secure page. Never echo a password back, and never log the full request body.
 
-### Snapshot input for `GetUsageBilling`
+#### Snapshot input for `GetUsageBilling`
 
 ```proto
 message MultiServiceOrganizationConsumption {
@@ -384,7 +661,7 @@ message MultiServiceOrganizationConsumption {
 
 Pass `{}` to preview against current consumption. Populate only when previewing a hypothetical bill.
 
-### Enums
+#### Enums
 
 ```proto
 enum DateFilter {
@@ -449,7 +726,7 @@ enum PlanTier {
 // (chain support is added over time; the proto is the source of truth).
 ```
 
-### Response messages
+#### Response messages
 
 ```proto
 message Subscription {
@@ -628,7 +905,7 @@ message ActiveConnectionsResponse {
 }
 ```
 
-### Hosted-deployment response messages
+#### Hosted-deployment response messages
 
 Every hosted response carries a `bool success` + `string message` envelope; the payload sits in a nested field. On `success == false`, surface `message` to the user rather than the empty payload.
 
@@ -742,7 +1019,7 @@ message LogsResponse {
 message PodLogs { string pod_name = 1; string logs = 2; }
 ```
 
-### Hosted-deployment mutation responses
+#### Hosted-deployment mutation responses
 
 All share the `bool success` + `string message` envelope; most carry no further payload. Report `message` to the user verbatim on failure, and confirm the action succeeded on `success == true`.
 
@@ -762,7 +1039,7 @@ message DeployDatabaseResponse {
 }
 ```
 
-### Filter quick rules
+#### Filter quick rules
 
 - `date_filter`: pick from the enum (no custom date range field exists). For "last 6 months" or arbitrary windows, use `DATE_FILTER_CURRENT_YEAR` and slice `daily_metrics` locally by `date` prefix.
 - `provider`: `PROVIDER_ALL` to skip; `PROVIDER_SF` or `PROVIDER_PINAX` to scope.
@@ -772,17 +1049,17 @@ message DeployDatabaseResponse {
 
 Never pass an empty string for an enum field — the request will fail with `invalid_argument`. Pass the explicit `*_UNSET` / `*_ALL` value.
 
-### Unit reminders
+#### Unit reminders
 
 - All `*_cents` fields are integer cents. Divide by 100 for dollars.
 - `BytesValue.value` paired with `BytesUnit` — e.g. `value=100, unit=BYTES_UNIT_GIBIBYTE` means 100 GiB.
 - Daily metric `bytes` and `*_egress_bytes` are raw `uint64`. Format with a humanized unit (GiB / TiB) for display.
 
-## Rendering & Humanization Rules
+### Rendering & Humanization Rules
 
 **Never show raw enum strings, raw cents, or raw byte counts to the user.** Always translate to the friendly form below before rendering. Raw values appear only when the user explicitly asks for "raw" or "json".
 
-### Enum → human label
+#### Enum → human label
 
 | Enum value | Display as |
 |---|---|
@@ -844,7 +1121,7 @@ Never pass an empty string for an enum field — the request will fail with `inv
 
 For an enum value not in this table (e.g. a `Network` member), title-case the suffix after the prefix. Example: `ETH_MAINNET` → "Ethereum Mainnet", `OPT_MAINNET` → "Optimism Mainnet", `SOL_MAINNET` → "Solana Mainnet". When unsure of the canonical product name, ask the user or fall back to the raw token in backticks so it's clearly an identifier (e.g. `` `STARKNET_MAINNET` ``).
 
-### Numbers → friendly form
+#### Numbers → friendly form
 
 - **Money**: `*_cents` → `$X.XX` (divide by 100, two decimals, omit trailing zeros on whole dollars). `12300` → `$123`. `12345` → `$123.45`.
 - **Bytes**: raw `uint64` → IEC binary unit with one decimal. `1_073_741_824` → `1.0 GiB`. Pick the smallest unit ≥ 1.0 (MiB / GiB / TiB).
@@ -852,7 +1129,7 @@ For an enum value not in this table (e.g. a `Network` member), title-case the su
 - **`base_price` (uint32 cents)**: divide by 100, append `/mo` if showing as a plan price. `9900` → `$99/mo`.
 - **IDs**: render in backticks. Optionally truncate long opaque IDs to first 8 + last 4 with `...` in the middle when listing many (e.g. `0cyje0b9...98e6`); keep full ID in the source for any copy-out.
 
-### Plan summary template
+#### Plan summary template
 
 When the user asks "what's our plan", render this shape (fill in available fields, skip the rest):
 
@@ -864,13 +1141,13 @@ Token-API plans substitute the quota line:
 
 > Quotas: **{plan_credits_cents}** credits, **{rate_limit_per_minute}** req/min, access up to **{maximum_allowed_endpoint_group}**, **{historical_data_availability}** historical depth.
 
-### Bill summary template
+#### Bill summary template
 
 > Projected total: **{total_cents}**. Substreams/Firehose: **{base_price_cents}** base + **{egress_overage_cents}** egress overage + **{blocks_overage_cents}** blocks overage. Token API: **{token_api_cost_cents}** ({token_api_credits_cents} credits applied, **{token_api_overage_cents}** overage).
 
 Surface `substreams_quota_exceeded` / `token_api_quota_exceeded` as a separate inline warning (e.g. "⚠ Substreams quota exceeded this period.").
 
-### Usage summary template
+#### Usage summary template
 
 For `MultiServiceUsageSummaryByOrganization`, render one row per non-zero service:
 
@@ -883,7 +1160,7 @@ For `MultiServiceUsageSummaryByOrganization`, render one row per non-zero servic
 
 Skip rows where all buckets are zero — don't show empty noise.
 
-### Deployment summary template
+#### Deployment summary template
 
 For `ListDeployments`, render one row per deployment, sorted with errors/failing first:
 
@@ -900,7 +1177,7 @@ Flag trouble inline: `crashloopbackoff == true`, `deployment_state == DEPLOYMENT
 
 Humanize `head_block_time_drift` as "X behind real-time" (seconds → "Ns", "Nm", or "live" when ≈ 0). Render block numbers with thousands separators.
 
-## Mutations — Confirmation Protocol
+### Mutations — Confirmation Protocol
 
 Read routes never need confirmation. Every mutating `HostedService` route does. Before calling one:
 
@@ -912,29 +1189,29 @@ Read routes never need confirmation. Every mutating `HostedService` route does. 
 
 If the server returns `permission_denied`, the logged-in user lacks the OWNER/ADMIN role required to mutate — surface that; do not retry.
 
-## Conversational Playbook
+### Conversational Playbook
 
 Default to a short prose answer plus a small markdown table when multiple numbers matter. No raw JSON unless the user explicitly asks ("raw"/"json").
 
-### "What's our current plan / subscription?"
+#### "What's our current plan / subscription?"
 
 Call `GetOrganizationSubscription` + `GetBillingDetails`. Translate enums to friendly names: `PLAN_TIER_PRO` → "Pro", `OVERAGE_TYPE_METERED` → "overages allowed (metered)", `OVERAGE_TYPE_STRICT` → "hard cap". Convert `base_price` cents → dollars. Surface quotas from `substreams_config` / `token_api_config`.
 
 > Acme Inc. is on the **Pro** tier for Substreams. Base $99/mo, overages metered. Quota: 100 GiB egress + 50M blocks. 16 max workers, 32 max parallel requests.
 
-### "What's our usage this month?"
+#### "What's our usage this month?"
 
 Call `MultiServiceUsageSummaryByOrganization`. For each non-zero service, report the `current_month` bucket. For a trend, follow up with `UsageByOrganization` (`DATE_FILTER_CURRENT_MONTH`) and render daily totals.
 
-### "What's our usage for API key `key_xxx` over the last 6 months?"
+#### "What's our usage for API key `key_xxx` over the last 6 months?"
 
 `DateFilter` has no 6-month enum. Use `DATE_FILTER_CURRENT_YEAR`, scope to `api_key_id: "key_xxx"`, then locally sum the last ~180 days of `daily_metrics`. Tell the user "Returned the trailing 6 months from your current-year usage." If they need precision, run `LAST_MONTH` + `CURRENT_MONTH` for the 2-month tail and stitch.
 
-### "What will our next bill be?"
+#### "What will our next bill be?"
 
 Call `GetUsageBilling` with `{"usage":{}}`. Report `summary.total_cents / 100` as the headline. If `substreams_quota_exceeded` or `token_api_quota_exceeded` is true, surface that. Break out per-service from `details.substreams`, `details.firehose`, `details.token_api`.
 
-### "Should we upgrade / downgrade?"
+#### "Should we upgrade / downgrade?"
 
 Rubric, in order:
 
@@ -948,33 +1225,33 @@ Rubric, in order:
    - Else → hold.
 5. Phrase as advice. Do **not** change the plan — billing/subscription mutations are out of scope (only the Portal UI does that).
 
-### "Who's connected right now?"
+#### "Who's connected right now?"
 
 Call `ActiveConnections`. Lead with the load fraction (`borrowed_workers / max_workers`, `active_requests / max_requests`). If `worker_count_per_trace_id` has entries, render a short table sorted by worker count desc.
 
 > 7/16 workers in use, 3/32 active requests. Top traces: `abc123` (4 workers), `def456` (3 workers).
 
-### "List my deployments / what's deployed?"
+#### "List my deployments / what's deployed?"
 
 Call `HostedService/ListDeployments` with `{"organization_id": "<ORG_ID>"}`. Render the deployment table (status, type, output module). If `success == false`, surface `message`. If `deployments` is empty, say there are no hosted deployments for the org.
 
-### "Is my sink running? / what's its status?"
+#### "Is my sink running? / what's its status?"
 
 If you don't have a `deployment_id`, call `ListDeployments` first and match by name. Then call `HostedService/GetDeploymentState` with `{"deployment_id": "...", "organization_id": "..."}`. Lead with the headline status (`deployment_state` + healthy/ready replica fraction), then per-pod execution detail (state, `current_block` / `head_block`, `head_block_time_drift`). Flag `crashloopbackoff`, `STATE_FAILING`, `DEPLOYMENT_STATE_ERROR`, or high restart counts as warnings.
 
-### "How far behind is my sink? / what's the head block?"
+#### "How far behind is my sink? / what's the head block?"
 
 `GetDeploymentState` → read `execution_states[].head_block` and `head_block_time_drift`. Report the head block and lag ("2.4s behind real-time" / "live"). With multiple pods, report each or the worst-lagging one.
 
-### "What happened to deployment `xxx`? / show recent events."
+#### "What happened to deployment `xxx`? / show recent events."
 
 Call `HostedService/GetDeploymentEvents` with `{"deployment_id": "...", "organization_id": "...", "limit": 20}`. Render newest-first as `created_at` — `event_type` — summarized `details` (the `details` field is a JSON string; parse and summarize key fields, don't dump it raw). Useful for explaining an ERROR or crashloop seen in `GetDeploymentState`.
 
-### "Show me the logs for deployment `xxx`"
+#### "Show me the logs for deployment `xxx`"
 
 Call `HostedService/Logs` with `{"deployment_id": "...", "organization_id": "...", "tail_lines": 200}`. Set `previous: true` to pull logs from a crashed container's prior instance (useful when `GetDeploymentState` shows crashloop). Render per-pod, trimmed; highlight error/panic lines rather than dumping everything.
 
-### "Deploy this spkg as a SQL sink" (mutation — confirm first)
+#### "Deploy this spkg as a SQL sink" (mutation — confirm first)
 
 Follow **`substreams-hosted-sink`** for the full sink workflow (that skill owns the deploy path). Two hard gates before Deploy:
 
@@ -1002,7 +1279,7 @@ Deploy confirmation must restate how quality was handled (`tested_ok` / `user_ve
 
 **Password:** secure stored-secret flow only — see below. Sequence: (1) mint `deployment_id` via `CreateDeployment`; (2) user stages password on the secure page — **wait for user confirmation**, then **one** `HasDeploymentSecret` check (no background poll); (3) confirm plan; (4) `Deploy` with `use_stored_secret: true` and empty `password`. Do **not** supply an API key. **`Deploy` may return HTTP 200 + empty `{}`** — treat as success and follow up with `GetDeploymentState`. If the first `Deploy` fails with a connection timeout/refused against a serverless output DB (cold start), retry 2–3 times waiting ~30–60s — tell the user the DB may be waking up; only treat auth/host-not-found as hard failures immediately.
 
-### "Provide the database password" / attach the output DB (mutation — confirm first)
+#### "Provide the database password" / attach the output DB (mutation — confirm first)
 
 The database password must never pass through you. Use this flow so the user enters it once, directly in the browser:
 
@@ -1024,7 +1301,7 @@ The database password must never pass through you. Use this flow so the user ent
 
 If a user pastes a password into the chat, **decline to use it**: explain it would land in the transcript, and point them at the secure page instead.
 
-### Collecting database connection info (one by one)
+#### Collecting database connection info (one by one)
 
 When the user brings their own Postgres/ClickHouse, ask **one question per turn** (with choices + **Other / custom** where useful):
 
@@ -1040,11 +1317,11 @@ When the user brings their own Postgres/ClickHouse, ask **one question per turn*
 
 Do not ask for all of these in one message.
 
-### "Scale my sink to N replicas / pause it" (mutation — confirm first)
+#### "Scale my sink to N replicas / pause it" (mutation — confirm first)
 
 `SetReplica` with `{"deployment_id":"...","count":N,"organization_id":"..."}`. `count: 0` pauses (no workers, stops processing). Confirm the target count, then report the new state.
 
-### "Undeploy / reset / delete deployment `xxx`" (destructive — confirm explicitly)
+#### "Undeploy / reset / delete deployment `xxx`" (destructive — confirm explicitly)
 
 - `Undeploy` tears down the running deployment.
 - `ResetDeployment` with `drop_schema:true` **drops the database schema**; `false` truncates tables. Both wipe sink data and restart from the configured start block.
@@ -1052,11 +1329,11 @@ Do not ask for all of these in one message.
 
 For all of these: state plainly what is destroyed and that it is irreversible, name the deployment, and require an explicit "yes" (see Confirmation Protocol). Never chain a destructive call automatically off an ambiguous request.
 
-### "Reconfigure / update deployment `xxx`" (mutation — confirm first)
+#### "Reconfigure / update deployment `xxx`" (mutation — confirm first)
 
 `UpdateDeploymentConfig`. Only set the fields being changed; leave `api_key_id` empty to keep the bound key. `restart_from_scratch:true` resets the cursor (foundational-store only) — call that out as data-affecting. Confirm the diff, then apply.
 
-## Default Render — Full Dashboard
+### Default Render — Full Dashboard
 
 When the user asks broadly ("give me the state of our account", "summary"), fan out five calls in parallel and assemble four cards:
 
@@ -1067,7 +1344,7 @@ When the user asks broadly ("give me the state of our account", "summary"), fan 
 
 Skip the daily chart by default; offer it as a follow-up.
 
-## Error Handling
+### Error Handling
 
 ConnectRPC returns HTTP status + JSON `{ "code": "...", "message": "...", "details": [...] }`. The `details` array carries an `sf.portalapi.v1.ErrorDetail` whose `debug.fields` names the offending field on `invalid_argument` — use it to locate a bad field instead of guessing. Report `message` to the user, not the raw envelope.
 
@@ -1075,7 +1352,7 @@ A **plain-text `404 page not found`** (not JSON) means the method name or servic
 
 | Code | Meaning | Action |
 |---|---|---|
-| `unauthenticated` | Access token expired/invalid, or route not in allowlist (`api/auth/agent_allowed_routes.go`) | The access token has most likely expired — refresh it (or re-run the device-code login) per `portal-api-jwt`, then retry once. Do not silently retry with the same expired token. |
+| `unauthenticated` | Access token expired/invalid, or route not in allowlist (`api/auth/agent_allowed_routes.go`) | The access token has most likely expired — refresh it (or re-run the device-code login) per Part 1, then retry once. Do not silently retry with the same expired token. |
 | `permission_denied` | Logged-in user not in the target org, or lacks the role for the action (deployment mutations need OWNER/ADMIN via `CanUserManageDeployments`) | Tell the user the token isn't scoped to this `organization_id`, or they lack permission for that action. Do not retry. |
 | `not_found` | Bad `organization_id` | Ask user to re-check the org ID. |
 | `invalid_argument` | Malformed body — usually a misspelled enum, empty-string for enum, or missing required field | Fix the body using the proto inline above. |
@@ -1083,7 +1360,7 @@ A **plain-text `404 page not found`** (not JSON) means the method name or servic
 
 Never include the access token or refresh token in error output shown to the user.
 
-## Maintaining This Skill
+### Maintaining This Skill
 
 The proto fragments above are inlined snapshots of the upstream definitions in `sf-saas-priv` (`proto/sf/portalapi/v1/portalapi.proto`, `hosted_service.proto`, `proto/sf/common/v1/types.proto`, and the `sf.hosted.common.v1` buf dependency). When the upstream proto changes in a way that affects one of the documented routes (new field, renamed field, new enum value, new method signature), update SKILL.md to match and bump `metadata.version`. The agent-callable set is gated server-side by `api/auth/agent_allowed_routes.go` — if a route isn't in that map it returns `unauthenticated` no matter what this doc says, so keep the two in sync. Note `HasDeploymentSecret` IS agent-callable but `StoreDeploymentSecret` is deliberately NOT (the password is entered by the user in the web UI, so an agent never writes it) — don't add it to the allowlist or call it from here. The `HostedService` payload types live in the external `buf.build/streamingfast/hosted-service` module, so they can change independently of `sf-saas-priv`.
 
@@ -1102,7 +1379,7 @@ whole surface documented here.
 
 If the assistant ever sees `invalid_argument` for what should be a valid body, or a response missing a documented field, the most likely cause is that this skill is out of date. Tell the user. Note the inverse failure is quieter and more likely: because unknown fields are **silently discarded**, a field this skill documents but the server has since removed produces a **successful call that ignores the setting**, with no error at all. When a config doesn't take effect, re-check the field against reflection before assuming a server bug.
 
-## Things the Assistant Should NOT Do
+### Things the Assistant Should NOT Do
 
 - Do not write or store the access token or refresh token to disk without explicit user consent.
 - Do not call routes outside the ones listed above — the server allowlist will reject them with `unauthenticated`. The skill covers the six `PortalApi` billing/usage reads plus the full `HostedService`; unrelated `PortalApi` routes (key/org/payment management) are not callable.

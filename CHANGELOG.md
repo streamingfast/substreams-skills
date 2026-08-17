@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Merged `portal-api` and `portal-api-jwt` into a single skill, `thegraph-market-api` (v1.0.0), so a developer outside StreamingFast can tell what it does from the name alone. Part 1 is the device-code login/refresh flow (previously `portal-api-jwt`); Part 2 is the billing/usage/hosted-deployment API reference and conversational playbook (previously `portal-api`). No functional change — content is carried over verbatim with internal cross-references updated to point within the merged file. Updated all references across `substreams-sink`, `substreams-sink-deploy-local`, `substreams-hosted-sink`, `substreams-dev`, `substreams-testing`, and `README.md`.
+
 ## [1.5.0](https://github.com/streamingfast/substreams-skills/releases/tag/v1.5.0)
 
 ### Changed

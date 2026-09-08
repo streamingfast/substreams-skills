@@ -6,7 +6,7 @@ Verified against the built-in SQL sink in `substreams` **v1.20.2** and ClickHous
 
 ## Mode
 
-ClickHouse supports **both** mapping modes, but **from-proto is the right one**. Database Changes on ClickHouse is insert-only (`OnlyInserts()=true`), has no delta ops, and cannot do DB-side reorg management (`Revert()` errors, the history path panics) — so it gives up schema generation for nothing. See `database-changes.md` if you must.
+ClickHouse supports **both** mapping modes, but **from-proto is the right one**. Database Changes on ClickHouse is insert-only (`OnlyInserts()=true`), has no delta ops, and cannot do DB-side reorg management, so it only starts with `--undo-buffer-size > 0` — a flag the StreamingFast-hosted runner does not pass today (see `substreams-hosted-sink`). Database Changes there gives up schema generation for nothing. See `database-changes.md` if you must.
 
 ## Generated DDL
 

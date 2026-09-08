@@ -237,7 +237,7 @@ Also: `tools cursor read` / `tools cursor write` for operators. Wiping the curso
 ### Reorg handling
 
 - **Postgres CDC**: real-time undo via `substreams_history`. Keep `--undo-buffer-size=0` (default) for DB reorg handling.
-- **ClickHouse / buffered path**: non-zero `--undo-buffer-size` delays writes until N confirmations (no in-DB undo).
+- **ClickHouse / buffered path**: non-zero `--undo-buffer-size` delays writes until N confirmations (no in-DB undo). **Required for Database Changes on ClickHouse**: with the default `0` the sink refuses to start (`driver clickhouse does not support reorg handling. You must use set a non-zero undo-buffer-size`). From-proto on ClickHouse does not need it.
 - Never-uncommitted data (accounting): Postgres CDC **or** `--final-blocks-only`.
 
 ### Want StreamingFast to host this SQL sink?
@@ -383,7 +383,7 @@ Cursor not persisted. SQL: lives in DB. Files: `./state.yaml` (`--state-store`).
 
 ### 4. ClickHouse / buffered path sees no rows for ~N blocks
 
-Undo buffer / finality delay. Tune `--undo-buffer-size` or use `--final-blocks-only` when appropriate.
+Undo buffer / finality delay. Tune `--undo-buffer-size` or use `--final-blocks-only` when appropriate (Database Changes on ClickHouse needs a non-zero buffer to start at all).
 
 ### 5. Auth required
 

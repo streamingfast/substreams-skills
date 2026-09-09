@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- `substreams-hosted-sink`, `substreams-sql` (and its `database-changes.md` / `clickhouse-patterns.md` references), `substreams-sink-deploy-local`: document how the hosted runner actually runs a SQL sink (substreams CLI, mode auto-detected from `module_output_type`) and that a `DatabaseChanges` module on ClickHouse refuses to start with the default `--undo-buffer-size=0`. On hosted ClickHouse the runner does not pass the flag, so such a deployment crash-loops — use a proto-typed output module there. The control plane will pass the flag automatically once streamingfast/services-control-plane#62 lands; when that ships, flip the "not deployed yet" wording in `substreams-hosted-sink/SKILL.md` (engine table, "How the hosted runner runs your module", pitfall 5) and `substreams-sql/SKILL.md` (capability matrix paragraph).
+
 ## [1.6.0](https://github.com/streamingfast/substreams-skills/releases/tag/v1.6.0)
 
 ### Changed

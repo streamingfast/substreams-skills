@@ -13,10 +13,10 @@ Works on **both** PostgreSQL and ClickHouse, but only PostgreSQL is generally us
 | INSERT | ✅ | ✅ |
 | UPDATE / DELETE / upsert | ✅ | ❌ — `OnlyInserts()=true`, every op becomes an insert |
 | Delta ops (`add`/`sub`/`min`/`max`/`set_if_null`) | ✅ | ❌ |
-| DB-side reorg handling | ✅ | ❌ — `Revert()` errors; history path panics |
+| DB-side reorg handling | ✅ | ❌ — sink refuses to start unless `--undo-buffer-size > 0` |
 | Duplicate PKs | rejected | allowed (`AllowPkDuplicates()=true`) |
 
-On ClickHouse you must pass `--undo-buffer-size > 0` to `run` (the default `0` turns on DB-side reorg handling, which ClickHouse cannot do). Since the mode is insert-only there anyway, prefer **from-proto** for ClickHouse.
+On ClickHouse you must pass `--undo-buffer-size > 0` to `substreams sink clickhouse` (the default `0` turns on DB-side reorg handling, which this dialect cannot do, and the sink exits at startup). On a StreamingFast-hosted sink you cannot pass it and the runner does not, so a `DatabaseChanges` module on hosted ClickHouse crash-loops (see `substreams-hosted-sink`). Since the mode is insert-only there anyway, prefer **from-proto** for ClickHouse.
 
 ## Setup
 

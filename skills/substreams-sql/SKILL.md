@@ -55,16 +55,16 @@ Chain + contract/protocol · data shape & primary keys · block range (`initialB
 
 ## Capability matrix (correct as of substreams v1.20.2)
 
-**Both modes work on both engines** — `ClickhouseDialect` implements the full Database Changes dialect, and `setup` / the engine command accept a ClickHouse DSN. The limits are about *capability*, not support:
+**Both modes run on both engines** — `ClickhouseDialect` implements the full Database Changes dialect, and `setup` / the engine command accept a ClickHouse DSN — but ClickHouse + Database Changes only starts with `--undo-buffer-size > 0`. The other limits are about *capability*, not support:
 
 | | PostgreSQL | ClickHouse |
 |---|---|---|
-| **Database Changes** | Full: INSERT / UPDATE / DELETE / upsert, delta ops, DB-side reorg handling | Runs, but **insert-only** (`OnlyInserts()=true`), **no reorg management**, **no delta ops**, duplicate PKs allowed |
+| **Database Changes** | Full: INSERT / UPDATE / DELETE / upsert, delta ops, DB-side reorg handling | Starts **only with `--undo-buffer-size > 0`**; **insert-only** (`OnlyInserts()=true`), **no reorg management**, **no delta ops**, duplicate PKs allowed |
 | **From proto** | Insert-only. Identifiers quoted. FK + `child_of` honored | Insert-only. `ReplacingMergeTree(_version_, _deleted_)`. `clickhouse_table_options` **required** |
 
 The mode is **auto-detected from the output module's proto type** — `sf.substreams.sink.database.v1.DatabaseChanges` selects Database Changes, anything else selects from-proto. There is no `from-proto` subcommand and no mode flag.
 
-**ClickHouse + Database Changes is rarely the right choice** — it is insert-only anyway, so it buys nothing over from-proto while losing schema generation. If you must: `Revert()` returns `"clickhouse driver does not support reorg management"` and the history-table path panics, so you **must** pass `--undo-buffer-size > 0` (the default `0` enables DB-side reorg handling and will fail).
+**ClickHouse + Database Changes is rarely the right choice** — it is insert-only anyway, so it buys nothing over from-proto while losing schema generation. If you must: the dialect cannot revert rows, so the sink refuses to start with DB-side reorg handling on (the default `--undo-buffer-size=0`) and exits with `driver clickhouse does not support reorg handling. You must use set a non-zero undo-buffer-size`. Pass `--undo-buffer-size > 0`: blocks are written only once that many blocks confirm them, and a deeper reorg leaves rows that cannot be undone. On a **StreamingFast-hosted sink** you cannot pass flags yourself and the runner does not pass this one, so a `DatabaseChanges` module on hosted ClickHouse crash-loops at startup: use a proto-typed output module there. A control-plane change (streamingfast/services-control-plane#62, **not deployed yet**) will make the operator pass it automatically, default 12 blocks. See `substreams-hosted-sink`.
 
 ## Prerequisites
 
@@ -352,6 +352,8 @@ Symptom of drift: `NO_SUCH_COLUMN_IN_TABLE` after deploying a "fixed" spkg. Drop
 **`clickhouse table options not set for table ...`** → stale error text from old docs; the real message names `clickhouse_table_options` as required. Add `order_by_fields`.
 
 **Rows never appear on a short test range** → batching. Database Changes: `--batch-block-flush-interval=1`. From-proto: `--block-batch-size=1`.
+
+**`driver clickhouse does not support reorg handling. You must use set a non-zero undo-buffer-size`** → Database Changes module on ClickHouse with the default `--undo-buffer-size=0`. Self-managed: pass a positive value. Hosted: switch to a from-proto module (the runner does not pass the flag today; see `substreams-hosted-sink`).
 
 **`invalid scheme postgresql`** → use `psql://` or `postgres://`.
 

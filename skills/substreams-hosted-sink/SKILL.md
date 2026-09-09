@@ -152,7 +152,7 @@ Mentally answer: **Is `OUTPUT_TEST_STATUS` set?**
 | Engine | Supported | Notes |
 |---|---|---|
 | **PostgreSQL** | ✅ | Database Changes **or** From proto definition |
-| **ClickHouse** | ✅ | **From proto definition only** (no Database Changes) |
+| **ClickHouse** | ✅ | **From proto definition**. Database Changes **crash-loops** (control-plane fix not deployed yet) — see "How the hosted runner runs your module" |
 
 **Not supported on hosted sinks** (do not offer, deploy, or invent configs for them here):
 
@@ -162,6 +162,20 @@ Mentally answer: **Is `OUTPUT_TEST_STATUS` set?**
 - **`GoogleCloudSqlPrivate`** — appears in the `OutputConfig` proto (`thegraph-market-api`) for private GCP Cloud SQL networking; **not** part of the standard agent-hosted Postgres/ClickHouse path. Do not invent Cloud SQL private configs unless product docs explicitly enable it for the user's org.
 
 If the user wants KV, files, or a self-managed sink binary, stop and use `substreams-sink-deploy-local` or `substreams-sink` instead. If they need help choosing among SQL / KV / files, use the choice tree in `substreams-sql` (Step 1), then return here only when they commit to hosted **SQL** into Postgres or ClickHouse.
+
+### How the hosted runner runs your module
+
+The runner is the substreams CLI (`substreams sink postgres` / `substreams sink clickhouse`, v1.20.2), not a standalone sink binary. The engine comes from the DSN the control plane builds from `outputConfig`, and the **mode is auto-detected from `module_output_type`**: `proto:sf.substreams.sink.database.v1.DatabaseChanges` runs Database Changes mode, any other proto runs From proto definition. There is no mode flag in the deploy request, and you cannot pass sink flags yourself.
+
+**ClickHouse + Database Changes crash-loops today.** The Database Changes ClickHouse dialect is insert-only and cannot revert rows (from-proto on ClickHouse is different: it handles reorgs itself with `_deleted_` tombstones). The sink therefore refuses to start unless it is told to hold blocks back with `--undo-buffer-size`, and the hosted runner is not passed that flag, so the pod fails at startup with:
+
+```
+driver clickhouse does not support reorg handling. You must use set a non-zero undo-buffer-size
+```
+
+**Rule: on ClickHouse, always use a proto-typed output module (From proto definition).** Do not offer Database Changes on ClickHouse for a new deploy. If a user says they have one running, ask for its `GetDeploymentState` output before believing it, and still do not offer that mode for anything new. A control-plane change (streamingfast/services-control-plane#62, **not deployed yet**) will make the operator pass `--undo-buffer-size` automatically for that engine + mode, default 12 blocks: each block is written only once 12 more have been seen on top of it, so writes lag head by 12 blocks, and a reorg deeper than 12 blocks leaves rows that can never be undone (confirmation depth, not chain finality). Even once that is live, from-proto stays the better fit on ClickHouse: insert-only either way, and the schema is generated from your proto.
+
+If a user hits the error above, that is the cause. The fix is a redeploy with a From proto definition module, which changes `output_module` (re-offer the output-quality test, see the ⛔ STOP gate). A sink that never started created no tables; only if an earlier deploy did (tables exist in the target database) run `ResetDeployment` with `drop_schema: true` first, see "Schema changes after Deploy".
 
 ### Pre-flight: always choose the engine
 
@@ -183,7 +197,7 @@ Then, **separate turn** for mapping mode when needed:
 | Chosen engine | Modes (own turn) |
 |---|---|
 | **PostgreSQL** | **Database Changes** · **From proto definition** · **Other / custom** |
-| **ClickHouse** | **From proto definition only** — do not offer Database Changes; explain briefly and proceed |
+| **ClickHouse** | **From proto definition** — do not offer Database Changes; it crash-loops today (see "How the hosted runner runs your module"). Proceed |
 
 Never proceed with an engine outside that table.
 
@@ -233,7 +247,7 @@ This skill owns the **sink-deployment workflow**; it does not re-document the AP
    - **Verify before Deploy:** `curl -sSIL` / download the URL; body size should match the local `.spkg` (binary), not an HTML page.
    - **Not allowed:** local filesystem paths, private GitHub/repo URLs, localhost, or anything requiring the user's machine. If the package is only local, **stop Deploy**, help publish/release, then continue.
    - **PostgreSQL + Database Changes:** module emits `proto:sf.substreams.sink.database.v1.DatabaseChanges` (build with `substreams-sql`).
-   - **PostgreSQL or ClickHouse + From proto definition:** custom proto (not `DatabaseChanges`); ClickHouse never uses Database Changes. Follow `substreams-sql` for PK/ORDER BY and **ClickHouse reserved column names**.
+   - **PostgreSQL or ClickHouse + From proto definition:** custom proto (not `DatabaseChanges`); on ClickHouse this is the only mode that runs today (see "How the hosted runner runs your module"). Follow `substreams-sql` for PK/ORDER BY and **ClickHouse reserved column names**.
 2. **No API key to supply** — data-plane key is auto-created per deployment (`Deployment.api_key_id`); separate from Portal Bearer.
 3. **A logged-in session** — Portal access token + pinned `organization_id` (`thegraph-market-api` Part 1). Login: **wait for user confirmation** — no background poll (see `thegraph-market-api` Part 1).
 4. **A PostgreSQL or ClickHouse database the user already runs** — StreamingFast never hosts or provisions it. Collect the connection fields **one by one**; `DeployDatabase` only attaches/validates that user-provided connection (it is **not** a provisioning step). Host must be **reachable from StreamingFast’s network** (not laptop `localhost` / Docker-only DNS). If the user has no database yet, they must create one (ClickHouse Cloud, managed Postgres, or self-hosted with public DNS) **before** deploying — do not imply StreamingFast will create it.
@@ -244,10 +258,10 @@ This skill owns the **sink-deployment workflow**; it does not re-document the AP
 
 | Type | Use for | Output module proto |
 |---|---|---|
-| `sink_sql_deployment` | Hosted SQL into **PostgreSQL or ClickHouse only** (the common case) | `DatabaseChanges` → standard mode (**Postgres only**); any other proto → From proto definition (Postgres or ClickHouse) |
+| `sink_sql_deployment` | Hosted SQL into **PostgreSQL or ClickHouse only** (the common case) | `DatabaseChanges` → Database Changes mode (**Postgres**; crash-loops on ClickHouse today); any other proto → From proto definition (Postgres or ClickHouse) |
 | `foundational_store_deployment` | A foundational store keyed by a proto type (advanced; e.g. Solana SPL account owners) — **not** a general-purpose SQL/KV/files sink | the `type_url` you specify |
 
-`module_output_type` decides SQL mode: exactly `proto:sf.substreams.sink.database.v1.DatabaseChanges` runs standard Database Changes (**valid only when `outputConfig` is Postgres**); anything else runs From proto definition. For ClickHouse, always use a non-`DatabaseChanges` module output type.
+`module_output_type` decides SQL mode: exactly `proto:sf.substreams.sink.database.v1.DatabaseChanges` runs Database Changes; anything else runs From proto definition. On ClickHouse, use a non-`DatabaseChanges` module output type (see "How the hosted runner runs your module").
 
 ## Workflow
 
@@ -380,7 +394,7 @@ curl -sS -X POST "$BASE_URL/sf.portalapi.v1.HostedService/Deploy" \
       }'
 ```
 
-**ClickHouse** (From proto definition only — never `DatabaseChanges`; connection is always inline in Deploy, not via `DeployDatabase`):
+**ClickHouse** (From proto definition — `DatabaseChanges` crash-loops today, see "How the hosted runner runs your module"; connection is always inline in Deploy, not via `DeployDatabase`):
 
 ```bash
 curl -sS -X POST "$BASE_URL/sf.portalapi.v1.HostedService/Deploy" \
@@ -481,7 +495,7 @@ From-proto uses **`CREATE TABLE IF NOT EXISTS`** — it does **not** migrate col
 2. **Quality check via local sink** — using `substreams sink postgres` / any sink binary or writing to local ClickHouse/Postgres “to test” is **wrong** for this gate. Quality check = **`substreams run` only** (command for the user; stdout/jsonl).
 3. **Unsupported engine** — hosted SQL is **PostgreSQL or ClickHouse only**. Never accept MySQL, SQLite, BigQuery, etc., or KV/files as the hosted destination; redirect to self-managed skills if needed.
 4. **Assuming StreamingFast provides the database** — it does **not**. StreamingFast hosts only the sink runner; the output DB is **always the user's own**, connected to remotely. `DeployDatabase` attaches/validates that existing connection — it never provisions a database (and its request has no `clickhouse_spec`, so ClickHouse connections are supplied inline in `Deploy`). If the user has no DB, they must stand one up (ClickHouse Cloud, managed Postgres, self-hosted with public DNS) first. Never promise to "provision/host/spin up/create" a database.
-5. **ClickHouse + Database Changes** — not supported. Use From proto definition (custom proto + annotations). Do not set `module_output_type` to `DatabaseChanges` when `outputConfig` is ClickHouse.
+5. **ClickHouse + Database Changes crash-loops** — `driver clickhouse does not support reorg handling. You must use set a non-zero undo-buffer-size` in the logs. Redeploy with a From proto definition module: that changes `output_module` (re-offer the quality test); `ResetDeployment` with `drop_schema: true` only if the target database already has tables from an earlier deploy. Details in "How the hosted runner runs your module".
 6. **ClickHouse PK vs ORDER BY** — create-table fails with `Primary key must be a prefix of the sorting key` when proto has e.g. `primary_key` on `id` but `order_by_fields: [slot, id]`. **Fix the spkg proto** (PK fields must be the leading `order_by_fields`), rebuild, redeploy — not the ClickHouse connection. Full rule and examples: `substreams-sql` → “ClickHouse hard rule: primary key must prefix ORDER BY”.
 7. **ClickHouse reserved column names** — e.g. `index`, `keys` → `SYNTAX_ERROR` on CREATE. Rename in proto before first deploy (`substreams-sql`).
 8. **`substreams_dev_id` parse failure** — logs show `invalid Substreams Registry short package identifier "substreams-dev://..."`: switch Deploy/Update to `spkg.url` = `https://api.substreams.dev/v1/packages/<name>/<version>`.
@@ -502,7 +516,7 @@ From-proto uses **`CREATE TABLE IF NOT EXISTS`** — it does **not** migrate col
 ## Resources
 
 - `thegraph-market-api` — full `HostedService` proto, state enums, confirmation protocol (Part 2), plus device-code login and token refresh (Part 1).
-- `substreams-sql` — build the SQL module (Database Changes on Postgres; From proto definition on Postgres/ClickHouse). Includes the sink-type choice tree (SQL vs KV vs files).
+- `substreams-sql` — build the SQL module (Database Changes on Postgres; From proto definition on Postgres/ClickHouse — the only mode running on hosted ClickHouse today). Includes the sink-type choice tree (SQL vs KV vs files).
 - `substreams-dev` / `substreams-testing` — data-plane auth and `substreams run` / quality verification before Deploy.
 - `substreams-sink-deploy-local` — run the same sink yourself instead of hosting it.
 - https://docs.substreams.dev/how-to-guides/sinks

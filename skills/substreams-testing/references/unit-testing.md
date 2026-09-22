@@ -24,16 +24,18 @@ There is **no** store mock API. Test pure key/value logic; exercise stores via C
 
 ```toml
 [dependencies]
-substreams = "0.7"
+substreams = "0.8.0-beta"
+# Generated code names `::buffa` at the crate root, so declare both even though
+# `substreams` re-exports them.
+buffa = { version = "0.9", default-features = false, features = ["std", "fast-utf8"] }
+buffa-types = { version = "0.9", default-features = false }
 # chain package as needed:
-substreams-ethereum = "0.11"
-# substreams-solana = "0.15"
+substreams-ethereum = "0.12.0-beta.1"
+# substreams-solana = "0.16.0-beta.1"
 
 [dev-dependencies]
 hex = "0.4"
 base64 = "0.22"
-prost = "0.13"
-prost-types = "0.13"
 # optional:
 # proptest = "1"
 # criterion = { version = "0.5", features = ["html_reports"] }
@@ -112,7 +114,7 @@ fn clock_examples() {
     // @value is milliseconds since Unix epoch
     let c = clock("50@1609459200000");
     assert_eq!(c.number, 50);
-    assert_eq!(c.timestamp.as_ref().unwrap().seconds, 1_609_459_200);
+    assert_eq!(c.timestamp.seconds, 1_609_459_200);
 
     let c = clock("blockhash@1609459200500");
     assert_eq!(c.number, 0);
@@ -170,28 +172,32 @@ fn legacy() {
 - **`parent_hash`** — on `BlockHeader`, not on `Block`
 
 ```rust
-use prost_types::Timestamp;
+use buffa_types::google::protobuf::Timestamp;
 use substreams_ethereum::pb::eth::v2::{
-    Block, BlockHeader, Log, TransactionReceipt, TransactionTrace,
+    Block, BlockHeader, Log, TransactionReceipt, TransactionTrace, TransactionTraceStatus,
 };
 
 pub fn create_block_with_transfer() -> Block {
     Block {
         number: 17_000_000,
         hash: bytes32(0xaa),
-        header: Some(BlockHeader {
+        header: BlockHeader {
             parent_hash: bytes32(0xbb),
             number: 17_000_000,
-            timestamp: Some(Timestamp {
+            timestamp: Timestamp {
                 seconds: 1_680_000_000,
                 nanos: 0,
-            }),
+                ..Default::default()
+            }
+            .into(),
             ..Default::default()
-        }),
+        }
+        .into(),
         transaction_traces: vec![TransactionTrace {
             hash: bytes32(0xcc),
-            status: 1, // SUCCEEDED — filter failed txs if your module does
-            receipt: Some(TransactionReceipt {
+            // Filter failed txs if your module does.
+            status: TransactionTraceStatus::Succeeded.into(),
+            receipt: TransactionReceipt {
                 logs: vec![erc20_transfer_log(
                     "a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
                     "742d35cc6634c0532925a3b844bc454e4438f44e",
@@ -199,7 +205,8 @@ pub fn create_block_with_transfer() -> Block {
                     1_000_000u128, // smallest units
                 )],
                 ..Default::default()
-            }),
+            }
+            .into(),
             ..Default::default()
         }],
         ..Default::default()
@@ -256,34 +263,44 @@ impl TestBlockBuilder {
                     h[24..].copy_from_slice(&number.to_be_bytes());
                     h
                 },
-                header: Some(BlockHeader {
+                header: BlockHeader {
                     number,
-                    timestamp: Some(Timestamp {
+                    timestamp: Timestamp {
                         seconds: 1_680_000_000 + (number as i64) * 12,
                         nanos: 0,
-                    }),
+                        ..Default::default()
+                    }
+                    .into(),
                     ..Default::default()
-                }),
+                }
+                .into(),
                 ..Default::default()
             },
         }
     }
 
     pub fn with_timestamp_secs(mut self, seconds: i64) -> Self {
-        if let Some(h) = self.block.header.as_mut() {
-            h.timestamp = Some(Timestamp { seconds, nanos: 0 });
+        // `MessageField` derefs for reading only, so mutation goes through an
+        // accessor. `get_or_insert_default` also covers the unset-header case
+        // that the `Option` version silently skipped.
+        self.block.header.get_or_insert_default().timestamp = Timestamp {
+            seconds,
+            nanos: 0,
+            ..Default::default()
         }
+        .into();
         self
     }
 
     pub fn add_log(mut self, log: Log) -> Self {
         self.block.transaction_traces.push(TransactionTrace {
             hash: bytes32(0x11),
-            status: 1,
-            receipt: Some(TransactionReceipt {
+            status: TransactionTraceStatus::Succeeded.into(),
+            receipt: TransactionReceipt {
                 logs: vec![log],
                 ..Default::default()
-            }),
+            }
+            .into(),
             ..Default::default()
         });
         self
@@ -321,7 +338,7 @@ fn real_block_smoke() {
 }
 ```
 
-Commit small fixtures under `src/testdata/` or `tests/fixtures/`. Prefer binary/base64 protobuf over JSON round-trips (JSON field shapes from firecore are not always 1:1 with `prost` types).
+Commit small fixtures under `src/testdata/` or `tests/fixtures/`. Prefer binary/base64 protobuf over JSON round-trips (JSON field shapes from firecore are not always 1:1 with the generated types).
 
 ## Solana unit tests
 

@@ -191,10 +191,13 @@ sink:
 
 ```toml
 [dependencies]
-substreams-database-change = "4"   # 4.0.0; prost 0.13
+substreams = "0.8.0-beta"
+substreams-database-change = "5.0.0-beta.1"
+buffa = { version = "0.9", default-features = false, features = ["std", "fast-utf8"] }
+buffa-types = { version = "0.9", default-features = false }
 ```
 
-> **Graph output is a different sink.** For The Graph use `sf.substreams.sink.entity.v1.EntityChanges`, not `DatabaseChanges` — see `substreams-sink`. Don't add `substreams-entity-change = "1"`: it pins `prost 0.11` / `substreams 0.5`, so its `BigDecimal`/`Hex` types are *distinct types* from the ones in `substreams 0.7` and won't interoperate.
+> **Graph output is a different sink.** For The Graph use `sf.substreams.sink.entity.v1.EntityChanges`, not `DatabaseChanges` — see `substreams-sink`. Don't add `substreams-entity-change = "1"`: it pins `prost 0.11` / `substreams 0.5`, so its `BigDecimal`/`Hex` types are *distinct types* from the buffa-generated ones and won't interoperate.
 
 ### Run
 

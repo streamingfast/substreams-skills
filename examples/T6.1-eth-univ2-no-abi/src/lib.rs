@@ -2,7 +2,7 @@ mod pb {
     pub mod univ2 {
         pub mod swaps {
             pub mod v1 {
-                include!(concat!(env!("OUT_DIR"), "/univ2.swaps.v1.rs"));
+                include!(concat!(env!("OUT_DIR"), "/univ2.swaps.v1.mod.rs"));
             }
         }
     }

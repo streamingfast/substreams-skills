@@ -5,7 +5,7 @@ use substreams_solana::pb::sf::solana::r#type::v1::Block;
 mod pb {
     pub mod sol {
         pub mod v1 {
-            include!(concat!(env!("OUT_DIR"), "/sol.v1.rs"));
+            include!(concat!(env!("OUT_DIR"), "/sol.v1.mod.rs"));
         }
     }
 }

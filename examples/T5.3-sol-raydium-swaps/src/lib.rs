@@ -6,7 +6,7 @@ mod pb {
     pub mod raydium {
         pub mod clmm {
             pub mod v1 {
-                include!(concat!(env!("OUT_DIR"), "/raydium.clmm.v1.rs"));
+                include!(concat!(env!("OUT_DIR"), "/raydium.clmm.v1.mod.rs"));
             }
         }
     }

@@ -6,7 +6,7 @@ mod pb {
     pub mod marinade {
         pub mod deposit {
             pub mod v1 {
-                include!(concat!(env!("OUT_DIR"), "/marinade.deposit.v1.rs"));
+                include!(concat!(env!("OUT_DIR"), "/marinade.deposit.v1.mod.rs"));
             }
         }
     }

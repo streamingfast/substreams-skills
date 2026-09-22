@@ -3,7 +3,7 @@ use substreams_solana::pb::sf::solana::r#type::v1::Block;
 mod pb {
     pub mod sol {
         pub mod v1 {
-            include!(concat!(env!("OUT_DIR"), "/sol.v1.rs"));
+            include!(concat!(env!("OUT_DIR"), "/sol.v1.mod.rs"));
         }
     }
 }
@@ -18,12 +18,12 @@ fn map_block_stats(block: Block) -> Result<BlockStats, substreams::errors::Error
 
     for tx in &block.transactions {
         total += 1;
-        let is_err = tx.meta.as_ref().map(|m| m.err.is_some()).unwrap_or(false);
+        let is_err = tx.meta.as_option().map(|m| m.err.is_set()).unwrap_or(false);
         if is_err {
             failed += 1;
         } else {
             success += 1;
-            if let Some(meta) = &tx.meta {
+            if let Some(meta) = tx.meta.as_option() {
                 compute_units += meta.compute_units_consumed.unwrap_or(0);
             }
         }

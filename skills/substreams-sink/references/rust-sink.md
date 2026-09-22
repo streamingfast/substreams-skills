@@ -33,8 +33,10 @@ tokio = { version = "1.27", features = ["time", "sync", "macros", "rt-multi-thre
 
 # gRPC
 tonic = { version = "0.12", features = ["gzip", "tls-roots"] }
-prost = "0.13"
-prost-types = "0.13"
+
+# Protobuf
+buffa = { version = "0.9", default-features = false, features = ["std", "fast-utf8"] }
+buffa-types = { version = "0.9", default-features = false }
 
 # Retry & backoff
 tokio-retry = "0.3"
@@ -72,7 +74,7 @@ my-sink/
 │   ├── substreams_stream.rs  # Stream wrapper with reconnection
 │   └── pb/
 │       ├── mod.rs        # Hand-written: `include!("pb.rs")` + trait impls
-│       └── pb.rs         # Generated module tree (neoeinstein-prost-crate)
+│       └── pb.rs         # Generated module tree (buffa)
 └── buf.gen.yaml
 ```
 
@@ -82,27 +84,18 @@ my-sink/
 
 ```yaml
 # buf.gen.yaml
-version: v1
-managed:
-  enabled: true
+version: v2
 plugins:
-  - plugin: buf.build/community/neoeinstein-prost:v0.4.0
+  - remote: buf.build/anthropics/buffa:v0.9.2
     out: src/pb
-    opt: file_descriptor_set=false
+    opt:
+      - lazy_views=true
+      - unknown_fields=false
 
   - plugin: buf.build/community/neoeinstein-tonic:v0.4.1
     out: src/pb
     opt:
       - no_server=true
-
-  # Required: emits src/pb/pb.rs, the `pub mod sf { pub mod substreams { ... } }`
-  # tree that every `crate::pb::sf::substreams::...` path depends on. Without it
-  # the other two plugins emit flat, unwired files and nothing resolves.
-  - plugin: buf.build/community/neoeinstein-prost-crate:v0.4.1
-    out: src/pb
-    opt:
-      - include_file=pb.rs
-      - no_features
 ```
 
 ```bash
@@ -300,7 +293,7 @@ fn stream_blocks(
                 start_cursor: latest_cursor.clone(),
                 stop_block_num,
                 final_blocks_only: false,
-                package: package.clone(),
+                package: package.clone().into(),
                 output_module: output_module_name.clone(),
                 production_mode: true,
                 ..Default::default()
@@ -404,7 +397,7 @@ impl Stream for SubstreamsStream {
 use anyhow::Error;
 use futures03::StreamExt;
 use std::{env, sync::Arc};
-use prost::Message;
+use buffa::Message;
 
 use crate::pb::sf::substreams::rpc::v2::{BlockScopedData, BlockUndoSignal};
 use crate::pb::sf::substreams::v1::Package;
@@ -454,14 +447,14 @@ async fn main() -> Result<(), Error> {
 }
 
 fn process_block(data: &BlockScopedData) -> Result<(), Error> {
-    let output = data.output.as_ref()
-        .and_then(|o| o.map_output.as_ref())
+    let output = data.output.as_option()
+        .and_then(|o| o.map_output.as_option())
         .expect("missing output");
 
-    let clock = data.clock.as_ref().expect("missing clock");
+    let clock = &data.clock;
 
     // Decode your protobuf type
-    // let events = YourType::decode(output.value.as_slice())?;
+    // let events = YourType::decode_from_slice(&output.value)?;
 
     println!(
         "Block #{}: {} ({} bytes)",
@@ -477,8 +470,7 @@ fn process_block(data: &BlockScopedData) -> Result<(), Error> {
 }
 
 fn process_undo(signal: &BlockUndoSignal) -> Result<(), Error> {
-    let last_valid = signal.last_valid_block.as_ref()
-        .expect("missing last_valid_block");
+    let last_valid = &signal.last_valid_block;
 
     println!("Reorg: rewind to block #{}", last_valid.number);
 
@@ -506,7 +498,7 @@ async fn load_package(path: &str) -> Result<Package, Error> {
         std::fs::read(path)?
     };
 
-    Ok(Package::decode(bytes.as_slice())?)
+    Ok(Package::decode_from_slice(&bytes)?)
 }
 ```
 
@@ -582,16 +574,16 @@ async fn persist_cursor_to_db(
 ## Decoding Output Data
 
 ```rust
-use prost::Message;
+use buffa::Message;
 use crate::pb::your_module::YourOutputType;
 
 fn process_block(data: &BlockScopedData) -> Result<(), Error> {
-    let output = data.output.as_ref()
-        .and_then(|o| o.map_output.as_ref())
+    let output = data.output.as_option()
+        .and_then(|o| o.map_output.as_option())
         .ok_or_else(|| anyhow!("missing output"))?;
 
     // Decode to your generated type
-    let events = YourOutputType::decode(output.value.as_slice())?;
+    let events = YourOutputType::decode_from_slice(&output.value)?;
 
     for event in events.items {
         // Process each event

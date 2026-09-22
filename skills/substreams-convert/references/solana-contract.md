@@ -58,14 +58,11 @@ Follow the step-by-step guide below.
 ```toml
 # Cargo.toml — key dependencies for Solana Substreams
 [dependencies]
-substreams        = "0.7"          # Matched pair with substreams-solana 0.15
-substreams-solana = "0.15"         # Block model + walk_instructions helper
-bs58              = "0.4"          # base58 encode/decode for pubkeys
-prost             = "0.13"
-prost-types       = "0.13"
-
-[build-dependencies]
-prost-build = "0.13"
+substreams        = "0.8.0-beta"       # Matched pair with substreams-solana 0.16
+substreams-solana = "0.16.0-beta.1"    # Block model + walk_instructions helper
+bs58              = "0.4"              # base58 encode/decode for pubkeys
+buffa             = { version = "0.9", default-features = false, features = ["std", "fast-utf8"] }
+buffa-types       = { version = "0.9", default-features = false }
 
 [profile.release]
 lto       = true
@@ -73,7 +70,7 @@ opt-level = "s"
 strip     = "debuginfo"
 ```
 
-> **Version compatibility**: use a **matched pair** only — `substreams = "0.7"` + `substreams-solana = "0.15"` (default), or legacy `substreams = "0.6"` + `substreams-solana = "0.14.x"`. Check [crates.io/crates/substreams-solana](https://crates.io/crates/substreams-solana) before assuming these pins forever.
+> **Version compatibility**: use a **matched pair** only — `substreams = "0.8.0-beta"` + `substreams-solana = "0.16.0-beta.1"` (buffa types, current), or legacy `substreams = "0.7"` + `substreams-solana = "0.15"` (prost types). Check [crates.io/crates/substreams-solana](https://crates.io/crates/substreams-solana) before assuming these pins forever.
 >
 > **WARNING — do NOT mix majors** (`0.7` with `0.14`, or `0.6` with `0.15`). That causes dual dependency trees / linker errors ("symbol multiply defined") at build time.
 

@@ -2,7 +2,7 @@ mod pb {
     pub mod usdc {
         pub mod transfers {
             pub mod v1 {
-                include!(concat!(env!("OUT_DIR"), "/usdc.transfers.v1.rs"));
+                include!(concat!(env!("OUT_DIR"), "/usdc.transfers.v1.mod.rs"));
             }
         }
     }

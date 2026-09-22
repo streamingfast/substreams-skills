@@ -112,7 +112,7 @@ Do **not** call `clock()` with zero arguments — that does not compile.
 There is **no** `timestamp_seconds` or `parent_hash` field on `Block` — those live on **`header`** (`timestamp_seconds()` is a **method**).
 
 ```rust
-use prost_types::Timestamp;
+use buffa_types::google::protobuf::Timestamp;
 use substreams_ethereum::pb::eth::v2::{
     Block, BlockHeader, Log, TransactionReceipt, TransactionTrace,
 };
@@ -121,17 +121,20 @@ fn create_block_with_transfer() -> Block {
     Block {
         number: 17_000_000,
         hash: hex::decode("aa".repeat(32)).unwrap(),
-        header: Some(BlockHeader {
+        header: BlockHeader {
             parent_hash: hex::decode("bb".repeat(32)).unwrap(),
-            timestamp: Some(Timestamp {
+            timestamp: Timestamp {
                 seconds: 1_680_000_000,
                 nanos: 0,
-            }),
+                ..Default::default()
+            }
+            .into(),
             ..Default::default()
-        }),
+        }
+        .into(),
         transaction_traces: vec![TransactionTrace {
             hash: hex::decode("cc".repeat(32)).unwrap(),
-            receipt: Some(TransactionReceipt {
+            receipt: TransactionReceipt {
                 logs: vec![Log {
                     address: hex::decode("a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
                         .unwrap(),
@@ -150,7 +153,8 @@ fn create_block_with_transfer() -> Block {
                     ..Default::default()
                 }],
                 ..Default::default()
-            }),
+            }
+            .into(),
             ..Default::default()
         }],
         ..Default::default()
@@ -185,14 +189,14 @@ firecore tools firehose-client mainnet -o json -- 17000000 +100
 Load in Rust:
 
 ```rust
-use prost::Message;
+use buffa::Message;
 use substreams_ethereum::pb::eth::v2::Block;
 
 fn load_block_b64(path: &str) -> Block {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     let b64 = std::fs::read_to_string(path).expect("fixture missing");
     let bytes = STANDARD.decode(b64.trim()).expect("base64");
-    Block::decode(bytes.as_slice()).expect("protobuf Block")
+    Block::decode_from_slice(&bytes).expect("protobuf Block")
 }
 ```
 

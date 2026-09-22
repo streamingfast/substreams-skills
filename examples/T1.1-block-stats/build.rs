@@ -1,3 +1,8 @@
 fn main() {
-    prost_build::compile_protos(&["proto/stats.proto"], &["proto/"]).unwrap();
+    buffa_build::Config::new()
+        .files(&["proto/stats.proto"])
+        .includes(&["proto/"])
+        .preserve_unknown_fields(false)
+        .compile()
+        .unwrap();
 }

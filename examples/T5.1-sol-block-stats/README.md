@@ -22,7 +22,7 @@ Per-slot Solana stats: slot number, parent slot, total transactions (incl. faile
 
 ## What the skill provided
 
-- Solana Cargo.toml (`substreams = "0.6"`, `substreams-solana = "0.14.3"`, `prost = "0.13"`) — without `substreams = "0.6"`, `prost` version conflicts with `substreams-solana`
+- Solana Cargo.toml (`substreams = "0.8.0-beta"`, `substreams-solana = "0.16.0-beta.1"`, `buffa = "0.9"`) — declare `buffa` directly, generated code names `::buffa` at the crate root
 - Manifest with `network: solana` + `source: sf.solana.type.v1.Block`
 - **`block.transactions` (all) vs `block.transactions()` (successful only)** — confusable; skill calls this out explicitly
 - Compute units field path on `meta`

@@ -1,3 +1,8 @@
 fn main() {
-    prost_build::compile_protos(&["proto/nft_mints.proto"], &["proto/"]).unwrap();
+    buffa_build::Config::new()
+        .files(&["proto/nft_mints.proto"])
+        .includes(&["proto/"])
+        .preserve_unknown_fields(false)
+        .compile()
+        .unwrap();
 }

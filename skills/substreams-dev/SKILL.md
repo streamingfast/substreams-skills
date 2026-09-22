@@ -40,14 +40,14 @@ Substreams indexes blockchain data through composable Rust modules compiled to W
 
 ## Project Structure
 
-Generic layout — **both EVM and Solana use `build.rs`** for domain protobufs via `prost_build`. EVM additionally uses `abi/` + Abigen in the same `build.rs`; Solana does not.
+Generic layout — **both EVM and Solana use `build.rs`** for domain protobufs via `buffa_build`. EVM additionally uses `abi/` + Abigen in the same `build.rs`; Solana does not.
 
 ```
 my-substreams/
 ├── substreams.yaml              # Manifest (manual) — must include protobuf: + binaries:
 ├── README.md                    # Package docs for substreams.dev registry (manual)
 ├── Cargo.toml                   # Rust dependencies (manual)
-├── build.rs                     # prost_build (required); EVM also runs Abigen here
+├── build.rs                     # buffa_build (required); EVM also runs Abigen here
 ├── proto/events.proto           # Schema definitions (manual)
 ├── src/
 │   ├── lib.rs                   # Rust module code + mod pb { include!(OUT_DIR) } (manual)
@@ -55,7 +55,36 @@ my-substreams/
 └── target/                      # Build output (gitignored)
 ```
 
-**Do not hand-write generated proto Rust.** Prefer `build.rs` + `include!(concat!(env!("OUT_DIR"), "/…"))` (Solana T5.x / most EVM examples). If you use `substreams protogen`, the `src/pb/` tree is auto-generated — never create it by hand.
+**Do not hand-write generated proto Rust.** Prefer `build.rs` + `include!(concat!(env!("OUT_DIR"), "/…"))`, which every example in this repo uses:
+
+```rust
+// build.rs
+fn main() {
+    buffa_build::Config::new()
+        .files(&["proto/events.proto"])
+        .includes(&["proto/"])
+        .preserve_unknown_fields(false)
+        .compile()
+        .unwrap();
+}
+```
+
+```rust
+// src/lib.rs — the package name comes from the .proto's `package` declaration
+mod pb {
+    pub mod myproject {
+        pub mod v1 {
+            include!(concat!(env!("OUT_DIR"), "/myproject.v1.mod.rs"));
+        }
+    }
+}
+```
+
+`preserve_unknown_fields(false)` drops round-trip fidelity that WASM modules do not need and keeps decode cheap. Add `buffa-build` to `[build-dependencies]` alongside `buffa` / `buffa-types` in `[dependencies]`.
+
+Lazy views are **off by default**. A handler that takes a `*LazyView` (see Performance) needs them generated, so add `.lazy_views(true)` to the config above — the examples in this repo take owned types and do not enable it.
+
+Generating into a committed `src/pb/` with `buf generate` and a `buf.gen.yaml` also works and is what the SDK repos do, since they pull their block models from the BSR. It costs more upkeep: the buffa plugin emits one stitcher per proto package but no top-level `mod.rs`, so that file is hand-written and maintained by you. `build.rs` writes its own include file, so a standalone module has nothing to hand-maintain. If you use `substreams protogen`, the `src/pb/` tree is auto-generated — never create it by hand.
 
 ```bash
 substreams protogen  # Proto bindings only (fast iteration)
@@ -308,11 +337,11 @@ The index handler is a **`map` handler** returning `Keys` (a `repeated string` o
 fn index_events(events: Events) -> Result<Keys, Error> {
     let mut keys = Keys::default();
     for e in events.events {
-        if let Some(log) = e.log {
-            if let Some(t0) = log.topics.get(0) {
+        if e.log.is_set() {
+            if let Some(t0) = e.log.topics.get(0) {
                 keys.keys.push(format!("evt_sig:0x{}", Hex::encode(t0)));
             }
-            keys.keys.push(format!("evt_addr:0x{}", Hex::encode(&log.address)));
+            keys.keys.push(format!("evt_addr:0x{}", Hex::encode(&e.log.address)));
         }
     }
     Ok(keys)
@@ -378,21 +407,51 @@ The shims allow compilation but do not implement the underlying functionality �
 
 ### Cargo.toml (cross-cutting)
 
-Always set `crate-type = ["cdylib"]`, release LTO, and matching `prost` / `prost-types` majors.
+Always set `crate-type = ["cdylib"]`, release LTO, and declare `buffa` / `buffa-types` alongside `substreams`.
 
 | Chain | Skill for full Cargo.toml | Core crates |
 |---|---|---|
-| **EVM** | `substreams-ethereum` | `substreams = "0.7"`, `substreams-ethereum = "0.11"`, `ethabi = "18"`, `hex` |
-| **Solana** | `substreams-solana` | `substreams = "0.7"` + `substreams-solana = "0.15"` (legacy: `0.6` + `0.14.x` only — never mix majors), `bs58`, `sha2` |
-| **SQL DatabaseChanges** | `substreams-sql` | `substreams-database-change = "4"` (requires substreams 0.7) |
+| **EVM** | `substreams-ethereum` | `substreams = "0.8.0-beta"`, `substreams-ethereum = "0.12.0-beta.1"`, `hex` |
+| **Solana** | `substreams-solana` | `substreams = "0.8.0-beta"` + `substreams-solana` (never mix majors), `bs58`, `sha2` |
+| **SQL DatabaseChanges** | `substreams-sql` | `substreams-database-change = "5.0.0-beta.1"` |
 
-> **Pin `prost` / `prost-types` to `0.13` — do not bump to 0.14.** `substreams 0.7` requires `prost ^0.13.3`; bumping puts two `prost` copies in the tree and produces exactly the link errors below. This pin is intentionally behind crates.io latest.
+> **Declare `buffa` and `buffa-types` yourself — the `substreams` re-export does not cover them.** Generated protobuf code emits absolute `::buffa::` paths, which resolve only if your own crate has `buffa` as a direct dependency. A downstream crate that relies on `substreams::buffa` alone fails to compile with unresolved-crate errors in `src/pb`.
+>
+> ```toml
+> substreams = "0.8.0-beta"
+> buffa = { version = "0.9", default-features = false, features = ["std", "fast-utf8"] }
+> buffa-types = { version = "0.9", default-features = false }
+> ```
 
 **Shared pitfalls:**
 - `hex-literal` uses a hyphen in Cargo.toml
-- Missing `prost-types = "0.13"` when generated `src/pb` references `Timestamp` / `Any`
-- **Mix-major is not one failure mode.** Solana mismatched pairs (`substreams 0.6` + `substreams-solana 0.15`, or `0.7` + `0.14`) still **compile** but pull **two** `substreams` copies — check `cargo tree`, realign to a matched pair (`substreams-solana`). **Link / multiply-defined** errors are more often dual `prost` (0.13 vs 0.14) or `substreams-database-change` 4 on a `0.6` tree — realign then `rm -rf target && substreams build`
+- Missing `buffa-types` when generated `src/pb` references `Timestamp` / `Any`
+- **Mix-major is not one failure mode.** Solana mismatched pairs still **compile** but pull **two** `substreams` copies — check `cargo tree`, realign to a matched pair (`substreams-solana`). **Link / multiply-defined** errors are more often two `buffa` copies or a `substreams-database-change` mismatched to the `substreams` major — realign then `rm -rf target && substreams build`
 - WASM bindgen errors → `wasm/rust-v1+wasm-bindgen-shims` and/or `default-features = false` on `chrono` etc.
+
+### Singular message fields (`MessageField`)
+
+Singular message fields are `MessageField<T>`, not `Option<T>`. `MessageField` **derefs for reading**, so `block.header.timestamp` replaces `block.header.as_ref().unwrap().timestamp` — an unset field reads as the default rather than panicking.
+
+| Want | Use |
+|---|---|
+| Read a nested field | `x.field.inner` (deref) |
+| A genuine `Option` | `.as_option()` / `.into_option()` |
+| Presence check | `.is_set()` / `.is_unset()` |
+| Build one | `Inner { … }.into()` — not `Some(Inner { … })` |
+| Clear one | `MessageField::none()` |
+
+**There is no `DerefMut`.** Assigning through a deref is a compile error. Mutate with `.get_or_insert_default()`, `.as_option_mut()`, `.take()`, or `.modify(f)`:
+
+```rust
+x.header.get_or_insert_default().foo = value;   // not: x.header.as_mut().unwrap().foo = value
+```
+
+> **Migration hazard — deleting an unwrap can silently change behavior.** Because `MessageField` derefs to a **default**, removing an `.unwrap_or(x)` where `x` is **not** the zero value compiles cleanly and produces wrong numbers. A token `decimals` fallback of `.unwrap_or(18)` dropped during migration makes every amount wrong by 10¹⁸ — no error, no panic, just bad data.
+>
+> **Rule: when removing an unwrap, check what the fallback was.** Zero value → safe to drop. Anything else → keep it explicitly.
+
+Enums are `EnumValue<E>`, not bare `i32`: build with `TransactionTraceStatus::Succeeded.into()`, compare directly (`tx.status == TransactionTraceStatus::Succeeded`), and use `.to_i32()` / `.as_known()` when you need the raw value or an `Option<E>`.
 
 ### Map / store shape (generic)
 
@@ -441,6 +500,21 @@ The chain `Block` and its transactions are large. Cloning them in a handler is t
 
 Chain-specific iteration (EVM `transactions()` / `logs_with_calls()`, Solana `walk_instructions()`) belongs to `substreams-ethereum` and `substreams-solana` — follow those skills for the correct loop shape, which also determines *which* records you see, not just how fast you see them.
 
+### Lazy views
+
+A handler that takes a **lazy view** of the block instead of an owned `Block` decodes nested and repeated fields only when they are read, which measures **2.9-4.9x faster decode** on handlers that touch a small slice of the block.
+
+```rust
+#[substreams::handlers::map]
+fn map_transfers(blk: &eth::BlockLazyView<'_>) -> Result<MyOutput, Error> {
+    // nested fields decode when read
+}
+```
+
+**Lazy is selected purely by the handler signature.** There is no macro flag, no manifest field, and nothing to turn on — `blk: &eth::BlockLazyView<'_>` is lazy, `blk: eth::Block` is eager.
+
+**Trade-off: validation moves to access time.** An owned handler rejects a malformed block up front, before your code runs. A lazy one surfaces corruption as an `Err` from the accessor that touched it — so discarding that error (`unwrap_or_default()` and friends) turns an abort into silently-wrong output. Propagate accessor errors with `?`.
+
 > **Measuring:** `substreams run` executes your WASM **server-side**, so wall-clock time is dominated by network transfer and endpoint queueing, and a code change alters the module hash (cold cache) while the baseline ran warm. It is not a controlled A/B for handler CPU. To measure handler cost, benchmark at the WASM level — see `substreams-testing`.
 
 ## Common Patterns
@@ -462,7 +536,7 @@ Chain-specific iteration (EVM `transactions()` / `logs_with_calls()`, Solana `wa
 
 **These are NOT interchangeable.** Using `DatabaseChanges` in a `graph_out` module (or vice versa) compiles but produces a pipeline that fails or emits garbage.
 
-Do **not** rely on the `substreams-entity-change` crate for modern `substreams 0.7` pipelines. **v1** pins `prost ^0.11` (conflicts with prost 0.13); **v2.0.0** has `prost ^0.13` but still depends on **`substreams ^0.6`**, so it pulls a second `substreams` copy into a 0.7 tree. Inline the proto instead. Re-check [crates.io](https://crates.io/crates/substreams-entity-change) before changing this advice.
+Do **not** rely on the `substreams-entity-change` crate for modern `substreams 0.8` pipelines. Its published versions are all built against `prost` and an older `substreams` major, so they pull a second `substreams` copy — and a `prost` tree — into a buffa pipeline. Inline the proto instead. Re-check [crates.io](https://crates.io/crates/substreams-entity-change) before changing this advice.
 
 **`proto/entity.proto`** (exact package name required):
 ```proto
@@ -571,11 +645,11 @@ Read the first line for the head clock (`number` / hash). Default endpoint for a
 
 **Linking errors** ("symbol multiply defined", "failed to load bitcode") — almost always crate version mismatch:
 * `rm -rf target && substreams build`
-* Check for two `substreams` or two `prost` copies (`cargo tree -d`)
-* Common link breakers: dual `prost` (pin 0.13), or `substreams 0.6` + `substreams-database-change 4` (needs 0.7)
+* Check for two `substreams` or two `buffa` copies (`cargo tree -d`)
+* Common link breakers: dual `buffa`, a stray `prost` dragged in by a crate that has not migrated, or `substreams-database-change` mismatched to the `substreams` major
 * Dual `substreams` from a mismatched Solana pair often **still links** — fix the pins anyway (`substreams-solana`)
 
-**Missing method on ABI-generated types** ("no method named `decode`"): add `use substreams_ethereum::Event;` and ensure `ethabi = "18"`.
+**Missing method on ABI-generated types** ("no method named `decode`"): add `use substreams_ethereum::Event;` — the trait carries the method. Do not add `ethabi`: since 0.12 the generated bindings reference only `substreams_ethereum`, and `ethabi` pulls `getrandom`, which fails to build on wasm32.
 
 **spkg import 404s**:
 * Prefer **full URLs**: `https://spkg.io/v1/packages/<slug>/<version>` or `https://api.substreams.dev/v1/packages/<slug>/<version>`. Short `name@version` rewrites to `https://substreams.dev/v1/packages/...` and 404s (HTML site, not the package API).

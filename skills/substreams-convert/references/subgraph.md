@@ -229,7 +229,7 @@ pub fn map_transfers(block: eth::Block) -> Result<Transfers, Error> {
 }
 ```
 
-> **`substreams_ethereum::Event`** provides `match_and_decode` — equivalent to subgraph's automatic event binding. Add `substreams-ethereum = "0.11"` to `Cargo.toml`. Full Abigen / `logs_with_calls` / raw-topic0 patterns → **`substreams-ethereum` skill**.
+> **`substreams_ethereum::Event`** provides `match_and_decode` — equivalent to subgraph's automatic event binding. Add `substreams-ethereum = "0.12.0-beta.1"` to `Cargo.toml`. Full Abigen / `logs_with_calls` / raw-topic0 patterns → **`substreams-ethereum` skill**.
 
 > **Multiple contract addresses**: Subgraphs commonly index many contracts (e.g. all pairs in a factory). In Substreams, use a `HashSet` of known addresses populated from a store, then check membership against `log.address`. For dynamically discovered addresses (factory pattern), see Section 6 (Dynamic Data Sources).
 
@@ -296,7 +296,7 @@ CREATE TABLE IF NOT EXISTS balances (
 
 Add to `Cargo.toml`:
 ```toml
-substreams-database-change = "4"
+substreams-database-change = "5.0.0-beta.1"
 ```
 
 Add a `db_out` map module that converts your map output into database change records.
@@ -412,7 +412,7 @@ For ClickHouse, prefer **from-proto** (insert-only) unless you accept CDC insert
 > **Greenfield conversions should use the SQL sink (`db_out`) in Section 4.**  
 > `graph_out` / `EntityChanges` is for pipelines that still need Graph Node, hosted subgraphs, or `substreams-sink-subgraph` — not the default migration path.
 >
-> **Crate caveat:** do **not** add `substreams-entity-change` on modern `substreams = "0.7"` — it pins `prost 0.11` / `substreams 0.5` and type-conflicts with the rest of the stack. Prefer **inlining** the canonical `EntityChanges` proto (see **`substreams-sink`**).
+> **Crate caveat:** do **not** add `substreams-entity-change` on modern `substreams = "0.8.0-beta"` — it pins `prost 0.11` / `substreams 0.5` and type-conflicts with the buffa types the current stack generates. Prefer **inlining** the canonical `EntityChanges` proto (see **`substreams-sink`**).
 >
 > Wire compatibility and a working `graph_out` sketch live in the `substreams-sink` skill. This convert skill does not re-teach full entity-change tutorials.
 
@@ -462,18 +462,17 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-substreams                = "0.7"
-substreams-ethereum       = "0.11"
-substreams-database-change = "4"   # for db_out / SQL sink
-prost                     = "0.13"
-prost-types               = "0.13"
-hex                       = "0.4"
-hex-literal               = "0.4"
-num-bigint                = "0.4"
-ethabi                    = "17"
+substreams                 = "0.8.0-beta"
+substreams-ethereum        = "0.12.0-beta.1"
+substreams-database-change = "5.0.0-beta.1"   # for db_out / SQL sink
+buffa                      = { version = "0.9", default-features = false, features = ["std", "fast-utf8"] }
+buffa-types                = { version = "0.9", default-features = false }
+hex                        = "0.4"
+hex-literal                = "0.4"
+num-bigint                 = "0.4"
 
 [build-dependencies]
-substreams-ethereum = "0.11"
+substreams-ethereum = "0.12.0-beta.1"
 
 [profile.release]
 lto       = true

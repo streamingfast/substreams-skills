@@ -3,7 +3,7 @@ mod pb {
     pub mod uniswap {
         pub mod v3 {
             pub mod swaps {
-                include!(concat!(env!("OUT_DIR"), "/uniswap.v3.swaps.rs"));
+                include!(concat!(env!("OUT_DIR"), "/uniswap.v3.swaps.mod.rs"));
             }
         }
     }
@@ -125,14 +125,15 @@ pub fn map_pool_tokens(block: eth::Block) -> Result<PoolTokenPairs, Error> {
 
             result.entries.push(PoolTokenEntry {
                 pool_address: addr_to_hex(&pool_addr),
-                pair: Some(TokenPair {
+                pair: TokenPair {
                     token0_address: addr_to_hex(&token0_addr),
                     token0_symbol,
                     token0_decimals,
                     token1_address: addr_to_hex(&token1_addr),
                     token1_symbol,
                     token1_decimals,
-                }),
+                }
+                .into(),
             });
         }
     }
@@ -145,7 +146,7 @@ pub fn map_pool_tokens(block: eth::Block) -> Result<PoolTokenPairs, Error> {
 #[substreams::handlers::store]
 pub fn store_pool_tokens(pairs: PoolTokenPairs, store: StoreSetIfNotExistsProto<TokenPair>) {
     for entry in pairs.entries {
-        if let Some(pair) = entry.pair {
+        if let Some(pair) = entry.pair.into_option() {
             store.set_if_not_exists(0, &entry.pool_address, &pair);
         }
     }

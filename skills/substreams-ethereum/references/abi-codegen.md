@@ -38,10 +38,10 @@ fn main() {
         .expect("Failed to generate pool bindings")
         .write_to_file("src/abi/uniswap_v3_pool.rs")
         .expect("Failed to write pool bindings");
-
-    prost_build::compile_protos(&["proto/uniswap_v3.proto"], &["proto/"]).unwrap();
 }
 ```
+
+`build.rs` handles **ABI bindings only**. Domain protobufs are generated separately by `buf generate` with the `buf.build/anthropics/buffa` plugin, and the result is checked in — see the SKILL's *Protobuf codegen* section.
 
 `substreams-ethereum` must be in **`[build-dependencies]`** for this to compile, and in `[dependencies]` for the runtime trait. Generated files are written into `src/`, so they are compiled as normal modules — declare them in `src/abi/mod.rs` and add `mod abi;` to `lib.rs`.
 
@@ -144,7 +144,7 @@ Then decode by hand — see *Indexed vs non-indexed* below.
 
 ## Path 3 — Known signature
 
-For ERC-20/721/1155 and other standards, use the verified constants in [common-contracts.md](./common-contracts.md) with `ethabi` for the data words.
+For ERC-20/721/1155 and other standards, use the verified constants in [common-contracts.md](./common-contracts.md) and read the data words directly — a non-indexed `uint256` is a 32-byte big-endian slice of `log.data`, as T6.1 does. Reach for `ethabi` only off-chain: it pulls `getrandom`, which does not build for wasm32.
 
 ## Indexed vs non-indexed — the core decoding rule
 
@@ -196,9 +196,9 @@ let decoded = decode(
 ).map_err(|e| Error::msg(format!("decode failed: {e}")))?;
 ```
 
-Requires `ethabi = "17"` in `Cargo.toml` — **not `18`**, which duplicates the stack `substreams-ethereum-core` already links (see SKILL.md). Don't reach for `anyhow::anyhow!` here unless you also declare `anyhow` yourself; `substreams::errors::Error` is already an `anyhow::Error` alias and needs no new dependency.
+Requires `ethabi` in `Cargo.toml` if you call it yourself. Note it pulls `ethereum-types` → `rand` → `getrandom`, which fails to build on wasm32, so prefer hand-decoding or the generated bindings. Don't reach for `anyhow::anyhow!` here unless you also declare `anyhow` yourself; `substreams::errors::Error` is already an `anyhow::Error` alias and needs no new dependency.
 
-Note `ethabi` is only optional on the **hand-decode** path — T6.1 rolls its own `uint256`→decimal conversion and declares no `ethabi`. On the **Abigen** path it is mandatory regardless of whether you call it yourself, because the generated module references it.
+Since 0.12 the **Abigen** path needs no `ethabi` at all — the generated module references only `substreams_ethereum`. T6.1 shows the hand-decode path, which also declares none.
 
 ### Gotchas
 

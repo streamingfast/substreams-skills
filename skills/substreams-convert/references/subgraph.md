@@ -358,7 +358,7 @@ pub fn db_out(
 
 ```yaml
 imports:
-  database: https://github.com/streamingfast/substreams-sink-database-changes/releases/download/v4.0.0/substreams-sink-database-changes-v4.0.0.spkg
+  database: https://github.com/streamingfast/substreams-sink-database-changes/releases/download/v5.0.0-beta.1/substreams-sink-database-changes-v5.0.0-beta.1.spkg
   sql: https://github.com/streamingfast/substreams-sink-sql/releases/download/protodefs-v1.0.7/substreams-sink-sql-protodefs-v1.0.7.spkg
 
 modules:
@@ -492,7 +492,7 @@ package:
 network: mainnet
 
 imports:
-  database: https://github.com/streamingfast/substreams-sink-database-changes/releases/download/v4.0.0/substreams-sink-database-changes-v4.0.0.spkg
+  database: https://github.com/streamingfast/substreams-sink-database-changes/releases/download/v5.0.0-beta.1/substreams-sink-database-changes-v5.0.0-beta.1.spkg
   sql: https://github.com/streamingfast/substreams-sink-sql/releases/download/protodefs-v1.0.7/substreams-sink-sql-protodefs-v1.0.7.spkg
   # Optional foundational filter package (full URL, not name@version):
   # eth_common: https://spkg.io/v1/packages/ethereum-common/v0.3.3

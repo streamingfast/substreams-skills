@@ -34,9 +34,10 @@ tokio = { version = "1.27", features = ["time", "sync", "macros", "rt-multi-thre
 # gRPC
 tonic = { version = "0.12", features = ["gzip", "tls-roots"] }
 
-# Protobuf
-buffa = { version = "0.9", default-features = false, features = ["std", "fast-utf8"] }
-buffa-types = { version = "0.9", default-features = false }
+# Protobuf — prost, not buffa: tonic's generated clients are built on prost
+# messages. buffa is for WASM modules; a native sink has no reason to use it.
+prost = "0.13"
+prost-types = "0.13"
 
 # Retry & backoff
 tokio-retry = "0.3"
@@ -73,8 +74,8 @@ my-sink/
 │   ├── substreams.rs     # Endpoint configuration
 │   ├── substreams_stream.rs  # Stream wrapper with reconnection
 │   └── pb/
-│       ├── mod.rs        # Hand-written: `include!("pb.rs")` + trait impls
-│       └── pb.rs         # Generated module tree (buffa)
+│       ├── mod.rs        # Generated module tree (neoeinstein-prost-crate)
+│       └── sf.substreams.rpc.v2.rs   # …one file per proto package, plus *.tonic.rs
 └── buf.gen.yaml
 ```
 
@@ -86,17 +87,26 @@ my-sink/
 # buf.gen.yaml
 version: v2
 plugins:
-  - remote: buf.build/anthropics/buffa:v0.9.2
+  - remote: buf.build/community/neoeinstein-prost:v0.4.0
     out: src/pb
     opt:
-      - lazy_views=true
-      - unknown_fields=false
+      - file_descriptor_set=false
 
-  - plugin: buf.build/community/neoeinstein-tonic:v0.4.1
+  - remote: buf.build/community/neoeinstein-prost-crate:v0.4.1
+    out: src/pb
+    opt:
+      - no_features
+
+  - remote: buf.build/community/neoeinstein-tonic:v0.4.1
     out: src/pb
     opt:
       - no_server=true
 ```
+
+Every entry is `remote:` — `plugin:` is the v1 key and `buf` refuses a v2 file that uses it
+(`field plugin not found`). `neoeinstein-prost-crate` writes `src/pb/mod.rs`, the module tree that
+`include!`s one file per proto package; declare it as `mod pb;` from `main.rs` and do not hand-write
+it. Drop that plugin and you get the per-package files with nothing stitching them together.
 
 ```bash
 # Generate from Substreams registry

@@ -227,7 +227,7 @@ pub fn graph_out(events: Events) -> Result<EntityChanges, substreams::errors::Er
 }
 ```
 
-**Do NOT** add `substreams-entity-change` to `Cargo.toml` when using this workaround. The generated proto code is sufficient; adding the crate drags prost-generated types back in alongside the buffa ones.
+**Do NOT** add `substreams-entity-change` to `Cargo.toml`. The crate is deprecated and no longer supported by `graph-node`; the generated proto code is sufficient, and adding the crate drags prost-generated types back in alongside the buffa ones.
 
 > **For SQL sinks** (Postgres / ClickHouse / `db_out`), use `substreams-database-change = "5.0.0-beta.1"` — see `substreams-sql/SKILL.md`. Those crates ARE compatible with the current toolchain. Do NOT inline `DatabaseChanges` proto and call your module `graph_out` — that mixes sink types and the run will fail (or worse, succeed silently with garbage data).
 

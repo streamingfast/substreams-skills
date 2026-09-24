@@ -32,7 +32,7 @@ Import the official spkg; do not define the proto yourself:
 
 ```yaml
 imports:
-  database: https://github.com/streamingfast/substreams-sink-database-changes/releases/download/v4.0.0/substreams-sink-database-changes-v4.0.0.spkg
+  database: https://github.com/streamingfast/substreams-sink-database-changes/releases/download/v5.0.0-beta.1/substreams-sink-database-changes-v5.0.0-beta.1.spkg
 ```
 
 Module output type:

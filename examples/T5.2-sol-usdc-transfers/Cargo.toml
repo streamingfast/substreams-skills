@@ -12,9 +12,6 @@ substreams-solana = "0.16.0-beta.1"
 buffa = { version = "0.9", default-features = false, features = ["std", "fast-utf8"] }
 buffa-types = { version = "0.9", default-features = false }
 
-[build-dependencies]
-buffa-build = "0.9"
-
 [profile.release]
 lto = true
 opt-level = 's'

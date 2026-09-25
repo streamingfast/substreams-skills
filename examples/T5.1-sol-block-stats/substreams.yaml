@@ -9,6 +9,9 @@ protobuf:
     - sol/v1/sol.proto
   importPaths:
     - ./proto
+  excludePaths:
+    - sf/substreams
+    - google
 
 binaries:
   default:

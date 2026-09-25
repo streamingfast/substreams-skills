@@ -1,12 +1,4 @@
-mod pb {
-    pub mod usdc {
-        pub mod transfers {
-            pub mod v1 {
-                include!(concat!(env!("OUT_DIR"), "/usdc.transfers.v1.mod.rs"));
-            }
-        }
-    }
-}
+mod pb;
 
 use substreams::errors::Error;
 use substreams_ethereum::pb::eth::v2::Block;

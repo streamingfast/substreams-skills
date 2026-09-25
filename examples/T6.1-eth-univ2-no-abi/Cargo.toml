@@ -15,9 +15,6 @@ buffa = { version = "0.9", default-features = false, features = ["std", "fast-ut
 buffa-types = { version = "0.9", default-features = false }
 hex = "0.4"
 
-[build-dependencies]
-buffa-build = "0.9"
-
 [profile.release]
 lto = true
 opt-level = "s"

@@ -1,12 +1,6 @@
 use substreams_ethereum::Abigen;
 
 fn main() -> Result<(), anyhow::Error> {
-    buffa_build::Config::new()
-        .files(&["proto/uniswap_v3.proto"])
-        .includes(&["proto/"])
-        .preserve_unknown_fields(false)
-        .compile()
-        .expect("compiling protos");
 
     for name in ["erc20", "uniswap_v3_pool"] {
         Abigen::new(name, &format!("abi/{}.json", name))?

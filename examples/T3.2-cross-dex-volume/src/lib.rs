@@ -1,24 +1,5 @@
 mod abi;
-mod pb {
-    pub mod dex {
-        pub mod volume {
-            pub mod v1 {
-                include!(concat!(env!("OUT_DIR"), "/dex.volume.v1.mod.rs"));
-            }
-        }
-    }
-    pub mod sf {
-        pub mod substreams {
-            pub mod sink {
-                pub mod entity {
-                    pub mod v1 {
-                        include!(concat!(env!("OUT_DIR"), "/sf.substreams.sink.entity.v1.mod.rs"));
-                    }
-                }
-            }
-        }
-    }
-}
+mod pb;
 
 use std::collections::HashSet;
 

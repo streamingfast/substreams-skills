@@ -10,6 +10,9 @@ protobuf:
     - nft_mints.proto
   importPaths:
     - ./proto
+  excludePaths:
+    - sf/substreams
+    - google
 
 binaries:
   default:

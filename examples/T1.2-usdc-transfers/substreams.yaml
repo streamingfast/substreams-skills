@@ -10,6 +10,9 @@ protobuf:
     - usdc_transfers.proto
   importPaths:
     - ./proto
+  excludePaths:
+    - sf/substreams
+    - google
 
 binaries:
   default:

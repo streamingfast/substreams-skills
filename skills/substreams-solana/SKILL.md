@@ -203,20 +203,18 @@ Details: [references/loops-and-filters.md](./references/loops-and-filters.md).
 
 | Pair | When |
 |---|---|
-| `substreams = "0.7"` + `substreams-solana = "0.15"` | **Default** — `substreams-solana` 0.15 depends on substreams 0.7 |
-| `substreams = "0.6"` + `substreams-solana = "0.14"` | Existing packages / examples that still pin 0.14.x |
+| `substreams = "0.8.0-beta"` + `substreams-solana = "0.16.0-beta.1"` | **Default** — buffa-generated protobuf types |
+| `substreams = "0.7"` + `substreams-solana = "0.15"` | Existing packages still on prost |
+| `substreams = "0.6"` + `substreams-solana = "0.14"` | Legacy packages / examples that still pin 0.14.x |
 
 ```toml
 [dependencies]
-substreams = "0.7"
-substreams-solana = "0.15"
+substreams = "0.8.0-beta"
+substreams-solana = "0.16.0-beta.1"
 bs58 = "0.4"
-prost = "0.13"
-prost-types = "0.13"
+buffa = { version = "0.9", default-features = false, features = ["std", "fast-utf8"] }
+buffa-types = { version = "0.9", default-features = false }
 sha2 = "0.10"                  # Anchor discriminators when computing at runtime; prefer const bytes in hot paths
-
-[build-dependencies]
-prost-build = "0.13"
 
 [lib]
 crate-type = ["cdylib"]
@@ -227,14 +225,14 @@ opt-level = "s"
 strip = "debuginfo"
 ```
 
-**Keep the pair matched.** `substreams-solana` declares the `substreams` version it was built against (`0.15` → `substreams ^0.7`; `0.14.3` → `^0.6`). Pin the row above rather than mixing majors.
+**Keep the pair matched.** `substreams-solana` declares the `substreams` version it was built against (`0.16.0-beta` → `substreams ^0.8.0-beta`; `0.15` → `^0.7`; `0.14.3` → `^0.6`). Pin the row above rather than mixing majors. The 0.16 line generates buffa types; the 0.15 and 0.14 lines generate prost types, and the two do not interoperate.
 
 **Mix-major scenarios (do not treat as “always link-error”):**
 
 | What you mixed | What actually happens |
 |---|---|
 | `substreams 0.6` + `substreams-solana 0.15`, or `0.7` + `0.14` | Cargo still **builds** — it silently pulls **two** `substreams` copies into the tree. A green build is *not* proof the pins are right; `cargo tree \| grep substreams` should show **one** version. |
-| `prost` 0.13 vs 0.14, or `substreams-database-change` 4 on a `substreams 0.6` tree | Often real **link / type** failures — clean with `rm -rf target && substreams build` after realigning. |
+| A buffa row (`0.8.0-beta` + `0.16.0-beta`) mixed with a prost row, or `substreams-database-change` 4 on a `substreams 0.6` tree | Often real **link / type** failures — clean with `rm -rf target && substreams build` after realigning. |
 
 Re-check [crates.io/crates/substreams-solana](https://crates.io/crates/substreams-solana) before assuming these pins forever.
 

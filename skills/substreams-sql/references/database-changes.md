@@ -22,14 +22,17 @@ On ClickHouse you must pass `--undo-buffer-size > 0` to `substreams sink clickho
 
 ```toml
 [dependencies]
-substreams-database-change = "4"   # 4.0.0 — prost 0.13, substreams ^0.7.3
+substreams = "0.8.0-beta"
+substreams-database-change = "5.0.0-beta.1"
+buffa = { version = "0.9", default-features = false, features = ["std", "fast-utf8"] }
+buffa-types = { version = "0.9", default-features = false }
 ```
 
 Import the official spkg; do not define the proto yourself:
 
 ```yaml
 imports:
-  database: https://github.com/streamingfast/substreams-sink-database-changes/releases/download/v4.0.0/substreams-sink-database-changes-v4.0.0.spkg
+  database: https://github.com/streamingfast/substreams-sink-database-changes/releases/download/v5.0.0-beta.1/substreams-sink-database-changes-v5.0.0-beta.1.spkg
 ```
 
 Module output type:
@@ -201,12 +204,12 @@ fn emits_transfer_row() {
     let changes = db_out(test_events()).unwrap();
     let change = changes.table_changes.iter().find(|c| c.table == "transfers").unwrap();
 
-    // `operation` is a prost i32 — compare against the enum discriminant
-    assert_eq!(change.operation, Operation::Create as i32);
+    // `operation` is an `EnumValue<Operation>` — compare against the variant directly
+    assert_eq!(change.operation, Operation::Create);
 }
 ```
 
-The primary key is a `oneof` — `primary_key: Option<table_change::PrimaryKey>` — so match the variant rather than reaching for a `pk` field (there isn't one).
+The primary key is a `oneof` — `primary_key: Option<table_change::PrimaryKey>` — so match the variant rather than reaching for a `pk` field (there isn't one). A `oneof` stays a plain `Option` under buffa; it is singular *message* fields that become `MessageField`.
 
 Verify rows land end to end (short ranges need a small flush interval; the default is 1000 blocks):
 

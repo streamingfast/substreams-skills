@@ -33,6 +33,9 @@ tokio = { version = "1.27", features = ["time", "sync", "macros", "rt-multi-thre
 
 # gRPC
 tonic = { version = "0.12", features = ["gzip", "tls-roots"] }
+
+# Protobuf — prost, not buffa: tonic's generated clients are built on prost
+# messages. buffa is for WASM modules; a native sink has no reason to use it.
 prost = "0.13"
 prost-types = "0.13"
 
@@ -71,8 +74,8 @@ my-sink/
 │   ├── substreams.rs     # Endpoint configuration
 │   ├── substreams_stream.rs  # Stream wrapper with reconnection
 │   └── pb/
-│       ├── mod.rs        # Hand-written: `include!("pb.rs")` + trait impls
-│       └── pb.rs         # Generated module tree (neoeinstein-prost-crate)
+│       ├── mod.rs        # Generated module tree (neoeinstein-prost-crate)
+│       └── sf.substreams.rpc.v2.rs   # …one file per proto package, plus *.tonic.rs
 └── buf.gen.yaml
 ```
 
@@ -82,28 +85,28 @@ my-sink/
 
 ```yaml
 # buf.gen.yaml
-version: v1
-managed:
-  enabled: true
+version: v2
 plugins:
-  - plugin: buf.build/community/neoeinstein-prost:v0.4.0
+  - remote: buf.build/community/neoeinstein-prost:v0.4.0
     out: src/pb
-    opt: file_descriptor_set=false
+    opt:
+      - file_descriptor_set=false
 
-  - plugin: buf.build/community/neoeinstein-tonic:v0.4.1
+  - remote: buf.build/community/neoeinstein-prost-crate:v0.4.1
+    out: src/pb
+    opt:
+      - no_features
+
+  - remote: buf.build/community/neoeinstein-tonic:v0.4.1
     out: src/pb
     opt:
       - no_server=true
-
-  # Required: emits src/pb/pb.rs, the `pub mod sf { pub mod substreams { ... } }`
-  # tree that every `crate::pb::sf::substreams::...` path depends on. Without it
-  # the other two plugins emit flat, unwired files and nothing resolves.
-  - plugin: buf.build/community/neoeinstein-prost-crate:v0.4.1
-    out: src/pb
-    opt:
-      - include_file=pb.rs
-      - no_features
 ```
+
+Every entry is `remote:` — `plugin:` is the v1 key and `buf` refuses a v2 file that uses it
+(`field plugin not found`). `neoeinstein-prost-crate` writes `src/pb/mod.rs`, the module tree that
+`include!`s one file per proto package; declare it as `mod pb;` from `main.rs` and do not hand-write
+it. Drop that plugin and you get the per-package files with nothing stitching them together.
 
 ```bash
 # Generate from Substreams registry
@@ -300,7 +303,7 @@ fn stream_blocks(
                 start_cursor: latest_cursor.clone(),
                 stop_block_num,
                 final_blocks_only: false,
-                package: package.clone(),
+                package: package.clone().into(),
                 output_module: output_module_name.clone(),
                 production_mode: true,
                 ..Default::default()
@@ -404,7 +407,7 @@ impl Stream for SubstreamsStream {
 use anyhow::Error;
 use futures03::StreamExt;
 use std::{env, sync::Arc};
-use prost::Message;
+use buffa::Message;
 
 use crate::pb::sf::substreams::rpc::v2::{BlockScopedData, BlockUndoSignal};
 use crate::pb::sf::substreams::v1::Package;
@@ -454,14 +457,14 @@ async fn main() -> Result<(), Error> {
 }
 
 fn process_block(data: &BlockScopedData) -> Result<(), Error> {
-    let output = data.output.as_ref()
-        .and_then(|o| o.map_output.as_ref())
+    let output = data.output.as_option()
+        .and_then(|o| o.map_output.as_option())
         .expect("missing output");
 
-    let clock = data.clock.as_ref().expect("missing clock");
+    let clock = &data.clock;
 
     // Decode your protobuf type
-    // let events = YourType::decode(output.value.as_slice())?;
+    // let events = YourType::decode_from_slice(&output.value)?;
 
     println!(
         "Block #{}: {} ({} bytes)",
@@ -477,8 +480,7 @@ fn process_block(data: &BlockScopedData) -> Result<(), Error> {
 }
 
 fn process_undo(signal: &BlockUndoSignal) -> Result<(), Error> {
-    let last_valid = signal.last_valid_block.as_ref()
-        .expect("missing last_valid_block");
+    let last_valid = &signal.last_valid_block;
 
     println!("Reorg: rewind to block #{}", last_valid.number);
 
@@ -506,7 +508,7 @@ async fn load_package(path: &str) -> Result<Package, Error> {
         std::fs::read(path)?
     };
 
-    Ok(Package::decode(bytes.as_slice())?)
+    Ok(Package::decode_from_slice(&bytes)?)
 }
 ```
 
@@ -582,16 +584,16 @@ async fn persist_cursor_to_db(
 ## Decoding Output Data
 
 ```rust
-use prost::Message;
+use buffa::Message;
 use crate::pb::your_module::YourOutputType;
 
 fn process_block(data: &BlockScopedData) -> Result<(), Error> {
-    let output = data.output.as_ref()
-        .and_then(|o| o.map_output.as_ref())
+    let output = data.output.as_option()
+        .and_then(|o| o.map_output.as_option())
         .ok_or_else(|| anyhow!("missing output"))?;
 
     // Decode to your generated type
-    let events = YourOutputType::decode(output.value.as_slice())?;
+    let events = YourOutputType::decode_from_slice(&output.value)?;
 
     for event in events.items {
         // Process each event

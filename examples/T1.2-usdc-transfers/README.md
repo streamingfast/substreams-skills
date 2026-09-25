@@ -22,7 +22,7 @@ Index every USDC transfer on Ethereum mainnet. Emit `from`, `to`, `amount`, `tx_
 ## Files
 
 - [`substreams.yaml`](substreams.yaml) — manifest
-- [`Cargo.toml`](Cargo.toml) — deps (`substreams = "0.7"`, `substreams-ethereum = "0.11"`, `prost = "0.13"`)
+- [`Cargo.toml`](Cargo.toml) — deps (`substreams = "0.8.0-beta"`, `substreams-ethereum = "0.12.0-beta.1"`, `buffa = "0.9"`)
 - [`proto/usdc_transfers.proto`](proto/usdc_transfers.proto) — output schema
 - [`src/lib.rs`](src/lib.rs) — single map module, ~100 lines
 

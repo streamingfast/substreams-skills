@@ -10,6 +10,9 @@ protobuf:
     - univ2_swaps.proto
   importPaths:
     - ./proto
+  excludePaths:
+    - sf/substreams
+    - google
 
 binaries:
   default:

@@ -86,7 +86,7 @@ Before writing a `graph_out` or `db_out` module, choose the correct output proto
 | You want to write to... | Output proto type | Crate / proto package | When to use |
 |---|---|---|---|
 | **The Graph (subgraph entities)** | `sf.substreams.sink.entity.v1.EntityChanges` | `substreams-entity-change` (BROKEN — see below) | `graph_out` modules feeding a Graph Node, hosted subgraph, or `substreams-sink-subgraph` |
-| **Postgres / ClickHouse / SQL DB** | `sf.substreams.sink.database.v1.DatabaseChanges` | `substreams-database-change = "4"` | `db_out` modules feeding `substreams sink postgres`/`clickhouse` or hosted SQL sink |
+| **Postgres / ClickHouse / SQL DB** | `sf.substreams.sink.database.v1.DatabaseChanges` | `substreams-database-change = "5.0.0-beta.1"` | `db_out` modules feeding `substreams sink postgres`/`clickhouse` or hosted SQL sink |
 | **Custom sink (Go/Rust consumer)** | Your own proto type | n/a | Bespoke consumers reading raw module output |
 
 **Rule**: never use `DatabaseChanges` for graph-out, never use `EntityChanges` for SQL sinks. They are not interchangeable. Acceptance tests in eval corpus auto-zero on wrong proto type.
@@ -95,11 +95,11 @@ Before writing a `graph_out` or `db_out` module, choose the correct output proto
 
 > **Blocker — read before adding `substreams-entity-change`.**
 
-Do **not** rely on the `substreams-entity-change` crate for modern `substreams = "0.7"` pipelines:
-- **v1** pins `prost = "0.11"` / `substreams = "0.5"` → prost trait conflicts with the current toolchain.
-- **v2.0.0** has `prost ^0.13` but still depends on **`substreams ^0.6`**, so it does not drop cleanly into a 0.7 tree.
+Do **not** rely on the `substreams-entity-change` crate for modern `substreams = "0.8.0-beta"` pipelines:
+- **v1** pins `prost = "0.11"` / `substreams = "0.5"` → its generated types are prost types, which do not interoperate with the buffa types the current toolchain generates.
+- **v2.0.0** has `prost ^0.13` but still depends on **`substreams ^0.6`**, so it does not drop cleanly into a modern tree either.
 
-No version constraint fully fixes this for 0.7 today. Prefer inlining the proto (below). Re-check [crates.io](https://crates.io/crates/substreams-entity-change) before changing this advice.
+No version constraint fully fixes this today. Prefer inlining the proto (below). Re-check [crates.io](https://crates.io/crates/substreams-entity-change) before changing this advice.
 
 > **New projects:** prefer SQL (`db_out` + `substreams-sql` / the built-in SQL sink) over `graph_out` unless you specifically need Graph Node / EntityChanges.
 
@@ -183,22 +183,23 @@ modules:
 **3. Use the generated type in Rust**:
 
 ```rust
+use buffa::MessageField;
 use crate::pb::sf::substreams::sink::entity::v1::{EntityChange, EntityChanges, Field, Value};
 use crate::pb::sf::substreams::sink::entity::v1::entity_change::Operation;
 use crate::pb::sf::substreams::sink::entity::v1::value::Typed;
 
-// `Field.new_value` and `old_value` are `Value` messages, so the prost-generated
-// Rust type is `Option<Value>` — you cannot assign a raw String/Vec<u8>/u64 directly.
+// `Field.new_value` and `old_value` are `Value` messages, so the buffa-generated
+// Rust type is `MessageField<Value>` — you cannot assign a raw String/Vec<u8>/u64 directly.
 // Wrap each scalar in the appropriate `Typed::*` oneof variant. Helpers below
 // cover the common cases; add `Typed::Bool`, `Typed::Int32`, `Typed::Bigdecimal`,
 // `Typed::Timestamp` (i64), `Typed::Array` as needed for your schema.
 // Note `Typed::Bytes` takes a `String` (hex), not a `Vec<u8>` — see the proto above.
-fn val_string(s: impl Into<String>) -> Option<Value> {
-    Some(Value { typed: Some(Typed::String(s.into())) })
+fn val_string(s: impl Into<String>) -> MessageField<Value> {
+    Value { typed: Some(Typed::String(s.into())), ..Default::default() }.into()
 }
-fn val_bigint(decimal_str: impl Into<String>) -> Option<Value> {
+fn val_bigint(decimal_str: impl Into<String>) -> MessageField<Value> {
     // BigInt is wire-encoded as its decimal string, e.g. "12345"
-    Some(Value { typed: Some(Typed::Bigint(decimal_str.into())) })
+    Value { typed: Some(Typed::Bigint(decimal_str.into())), ..Default::default() }.into()
 }
 
 #[substreams::handlers::map]
@@ -210,14 +211,15 @@ pub fn graph_out(events: Events) -> Result<EntityChanges, substreams::errors::Er
             entity: "NftMint".to_string(),
             id: format!("{}-{}", mint.tx_hash, mint.log_index),
             ordinal: mint.ordinal,
-            operation: Operation::Create as i32,
+            operation: Operation::Create.into(),
             fields: vec![
                 // tokenId: uint256 → BigInt-as-decimal-string
-                Field { name: "tokenId".to_string(), old_value: None, new_value: val_bigint(mint.token_id.clone()) },
+                Field { name: "tokenId".to_string(), new_value: val_bigint(mint.token_id.clone()), ..Default::default() },
                 // address / hash fields: keep as hex strings for Graph Node consumption
-                Field { name: "to".to_string(),      old_value: None, new_value: val_string(mint.to.clone()) },
-                Field { name: "txHash".to_string(),  old_value: None, new_value: val_string(mint.tx_hash.clone()) },
+                Field { name: "to".to_string(),      new_value: val_string(mint.to.clone()), ..Default::default() },
+                Field { name: "txHash".to_string(),  new_value: val_string(mint.tx_hash.clone()), ..Default::default() },
             ],
+            ..Default::default()
         });
     }
 
@@ -225,9 +227,9 @@ pub fn graph_out(events: Events) -> Result<EntityChanges, substreams::errors::Er
 }
 ```
 
-**Do NOT** add `substreams-entity-change` to `Cargo.toml` when using this workaround. The generated proto code is sufficient; adding the crate triggers the prost conflict.
+**Do NOT** add `substreams-entity-change` to `Cargo.toml`. The crate is deprecated and no longer supported by `graph-node`; the generated proto code is sufficient, and adding the crate drags prost-generated types back in alongside the buffa ones.
 
-> **For SQL sinks** (Postgres / ClickHouse / `db_out`), use `substreams-database-change = "4"` — see `substreams-sql/SKILL.md`. Those crates ARE compatible with the current toolchain. Do NOT inline `DatabaseChanges` proto and call your module `graph_out` — that mixes sink types and the run will fail (or worse, succeed silently with garbage data).
+> **For SQL sinks** (Postgres / ClickHouse / `db_out`), use `substreams-database-change = "5.0.0-beta.1"` — see `substreams-sql/SKILL.md`. Those crates ARE compatible with the current toolchain. Do NOT inline `DatabaseChanges` proto and call your module `graph_out` — that mixes sink types and the run will fail (or worse, succeed silently with garbage data).
 
 ## Language Recommendations
 

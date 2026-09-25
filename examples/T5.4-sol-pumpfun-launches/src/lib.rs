@@ -2,13 +2,7 @@ use substreams::errors::Error;
 use substreams_solana::b58;
 use substreams_solana::pb::sf::solana::r#type::v1::Block;
 
-mod pb {
-    pub mod pumpfun {
-        pub mod v1 {
-            include!(concat!(env!("OUT_DIR"), "/pumpfun.v1.rs"));
-        }
-    }
-}
+mod pb;
 use pb::pumpfun::v1::{Launch, Launches};
 
 /// Pump.fun program ID on Solana mainnet
@@ -46,8 +40,8 @@ fn map_launches(block: Block) -> Result<Launches, Error> {
 
     for trx in block.transactions() {
         // Skip failed transactions
-        if let Some(meta) = &trx.meta {
-            if meta.err.is_some() {
+        if let Some(meta) = trx.meta.as_option() {
+            if meta.err.is_set() {
                 continue;
             }
         }

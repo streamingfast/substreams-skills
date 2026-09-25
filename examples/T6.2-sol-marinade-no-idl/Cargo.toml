@@ -7,13 +7,10 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-substreams = "0.6"
-substreams-solana = "0.14.3"
-prost = "0.13"
-prost-types = "0.13"
-
-[build-dependencies]
-prost-build = "0.13"
+substreams = "0.8.0-beta"
+substreams-solana = "0.16.0-beta.1"
+buffa = { version = "0.9", default-features = false, features = ["std", "fast-utf8"] }
+buffa-types = { version = "0.9", default-features = false }
 
 [profile.release]
 lto = true

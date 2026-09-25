@@ -2,15 +2,7 @@ use substreams::errors::Error;
 use substreams_solana::b58;
 use substreams_solana::pb::sf::solana::r#type::v1::Block;
 
-mod pb {
-    pub mod raydium {
-        pub mod clmm {
-            pub mod v1 {
-                include!(concat!(env!("OUT_DIR"), "/raydium.clmm.v1.rs"));
-            }
-        }
-    }
-}
+mod pb;
 use pb::raydium::clmm::v1::{Swap, Swaps};
 
 // Raydium CLMM program id

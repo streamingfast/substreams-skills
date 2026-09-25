@@ -13,6 +13,9 @@ protobuf:
     - entity.proto
   importPaths:
     - ./proto
+  excludePaths:
+    - sf/substreams
+    - google
 
 binaries:
   default:

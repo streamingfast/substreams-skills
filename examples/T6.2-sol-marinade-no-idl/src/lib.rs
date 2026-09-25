@@ -2,15 +2,7 @@ use substreams::errors::Error;
 use substreams_solana::b58;
 use substreams_solana::pb::sf::solana::r#type::v1::Block;
 
-mod pb {
-    pub mod marinade {
-        pub mod deposit {
-            pub mod v1 {
-                include!(concat!(env!("OUT_DIR"), "/marinade.deposit.v1.rs"));
-            }
-        }
-    }
-}
+mod pb;
 use pb::marinade::deposit::v1::{Deposit, Deposits};
 
 // Marinade Finance program ID

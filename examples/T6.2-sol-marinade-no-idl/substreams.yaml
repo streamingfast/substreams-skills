@@ -9,6 +9,9 @@ protobuf:
     - marinade/deposit/v1/deposits.proto
   importPaths:
     - ./proto
+  excludePaths:
+    - sf/substreams
+    - google
 
 binaries:
   default:

@@ -125,7 +125,7 @@ If the user names a protocol without an address, propose the mainnet address fro
 |---|---|---|
 | **ABI JSON** | User has ABI / verified on Etherscan / published | `Abigen` in `build.rs` → `match_and_decode` (**preferred**) |
 | **Solidity source** | No ABI JSON; source available | Derive canonical signature → `keccak256` → topic0; hand-decode (T6.1) |
-| **Known signature** | ERC-20/721/1155 or documented event | Known topic0 constant + `ethabi` decode |
+| **Known signature** | ERC-20/721/1155 or documented event | Known topic0 constant + hand-decoded data words |
 | **Other / enter a custom answer** | User describes another source | Follow their layout; still structured decode |
 
 **Decision rules:**
@@ -153,17 +153,16 @@ Details: [references/abi-codegen.md](./references/abi-codegen.md).
 
 ```toml
 [dependencies]
-substreams = "0.7"
-substreams-ethereum = "0.11"
-prost = "0.13"
-prost-types = "0.13"
+substreams = "0.8.0-beta"
+substreams-ethereum = "0.12.0-beta.1"
+buffa = { version = "0.9", default-features = false, features = ["std", "fast-utf8"] }
+buffa-types = { version = "0.9", default-features = false }
 hex = "0.4"
 hex-literal = "0.4"          # hyphen in Cargo.toml, underscore in `use hex_literal::hex`
-ethabi = "17"                # REQUIRED on the Abigen path (see below) — must be 17, not 18
 
 [build-dependencies]
-substreams-ethereum = "0.11" # REQUIRED for Abigen in build.rs
-prost-build = "0.13"
+substreams-ethereum = "0.12.0-beta.1" # REQUIRED for Abigen in build.rs
+buffa-build = "0.9"                   # REQUIRED for domain protobuf codegen in build.rs
 
 [lib]
 crate-type = ["cdylib"]
@@ -176,11 +175,9 @@ strip = "debuginfo"
 
 `substreams-ethereum` must be in **both** `[dependencies]` and `[build-dependencies]` when using `Abigen`.
 
-**`ethabi` is required on the Abigen path — and must be `17`, not `18`.** Abigen writes bare `ethabi::ParamType` / `ethabi::Token` paths into the file it generates in **your** crate, and `substreams-ethereum` does **not** re-export `ethabi`, so it must be a direct dependency of yours or the generated module fails to resolve. (All three Abigen examples in this repo declare it; the hand-decoding ones — T1.2, T2.1, T6.1 — correctly do not.)
+**`buffa` and `buffa-types` must be your own direct dependencies.** Generated protobuf code emits absolute `::buffa::` paths, and the re-export through `substreams` does not satisfy them — omit the dependency and `src/pb` fails to compile with unresolved-crate errors. `buffa-types` supplies the well-known types (`Timestamp`, `Any`) that generated code references.
 
-Pin **`17`**: `substreams-ethereum-core` pins `ethabi 17`, so `"18"` still compiles but silently links a **second** copy of the whole stack (`ethabi`, `ethereum-types`, `primitive-types`, …) into the wasm binary, and its types are not interchangeable with the crate's. Bigger binary, no benefit.
-
-**`getrandom` and `init!()` are not required on 0.11.** The crate's own docs still say to add a `getrandom` dependency and call `substreams_ethereum::init!();` — that guidance is stale. `substreams-ethereum` already declares `getrandom = { features = ["custom"] }` for `wasm32-unknown-unknown` itself, and cargo unifies the feature. No example in this repo does either, and all build. Both are harmless if present, but `init!()` only registers a handler that *always returns an error* — it satisfies the linker, it does not provide randomness.
+**`getrandom` and `init!()` are not required.** Older docs say to add a `getrandom` dependency and call `substreams_ethereum::init!();` — that guidance is stale. 0.12 declares no `getrandom` at all, and `init!()` expands to nothing, kept only so existing code keeps compiling. Declaring `getrandom` yourself is what *causes* the wasm32 build error, so leave both out.
 
 ## build.rs (ABI codegen)
 
@@ -192,12 +189,43 @@ fn main() {
         .expect("Failed to generate bindings")
         .write_to_file("src/abi/uniswap_v3_pool.rs")
         .expect("Failed to write bindings");
-
-    prost_build::compile_protos(&["proto/uniswap_v3.proto"], &["proto/"]).unwrap();
 }
 ```
 
 Create `src/abi/mod.rs` declaring each generated module (`pub mod uniswap_v3_pool;`), and `mod abi;` in `lib.rs`.
+
+## Protobuf codegen
+
+Domain protobufs are generated in the same `build.rs` that runs Abigen, via `buffa_build`, and land in
+`OUT_DIR` — nothing protobuf-related is checked in. Every EVM example in this repo does it this way.
+
+```rust
+// build.rs — alongside the Abigen calls above
+buffa_build::Config::new()
+    .files(&["proto/events.proto"])
+    .includes(&["proto/"])
+    .preserve_unknown_fields(false)
+    .compile()
+    .expect("compiling protos");
+```
+
+```rust
+// src/lib.rs — the path comes from the .proto's `package` declaration
+mod pb {
+    pub mod myproject {
+        pub mod v1 {
+            include!(concat!(env!("OUT_DIR"), "/myproject.v1.mod.rs"));
+        }
+    }
+}
+```
+
+`preserve_unknown_fields(false)` drops round-trip fidelity WASM modules do not need and keeps decode
+cheap. Lazy views are **off by default**: a handler taking a `*LazyView` needs `.lazy_views(true)` added
+to that config. This requires `buffa-build` in `[build-dependencies]`.
+
+Generating into a checked-in `src/pb/` with `buf generate` and a `buf.gen.yaml` also works, and is what
+the SDK repos do since they pull block models from the BSR — see `substreams-dev` for the trade-off.
 
 ## Manifest
 
@@ -417,9 +445,7 @@ After generators, still enforce the pre-flight event list and address filters.
 | Very slow / RPC timeouts | Unbatched or uncached `eth_call` — batch + `set_if_not_exists` store |
 | spkg import 404 | Use `substreams-ethereum`, NOT `sf-ethereum` (doesn't exist); verify the release exists |
 | `hex_literal` unresolved | Cargo key is `hex-literal` (hyphen); `use hex_literal::hex` (underscore) |
-| `getrandom` "not supported by default" on wasm32 | You pinned a stray `getrandom` **without** `features = ["custom"]`, or an old `substreams-ethereum`. On 0.11 the crate supplies this itself — remove your own `getrandom` dep rather than adding one |
-| `failed to resolve: use of undeclared crate 'ethabi'` in `src/abi/*.rs` | Abigen's generated code needs `ethabi` as **your** direct dependency — add `ethabi = "17"` |
-| Duplicate `ethabi` / `ethereum-types` in the build | You pinned `ethabi = "18"`; core pins `17`. Use `"17"` |
+| `getrandom` "not supported by default" on wasm32 | Something in your tree declares `getrandom`. 0.12 declares none itself — remove your own dep rather than adding a `features = ["custom"]` pin |
 | `cannot find function 'new' in ... Store` / `no method 'set_if_not_exists'` | Store handler missing `use substreams::store::StoreNew;` (the macro emits `::new()`) and the accessor trait |
 | ClickHouse `SYNTAX_ERROR` on `index` / `keys` | Rename columns in proto (`log_index`, `topic_keys`) — `substreams-sql` |
 

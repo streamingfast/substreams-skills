@@ -54,8 +54,8 @@ This skill documents the buffa stack. On the prost stack these differ:
 
 | | prost (≤ 0.7) | buffa (0.8+) |
 |---|---|---|
-| Codegen | `prost_build` in `build.rs` → `OUT_DIR` | `buf generate` → checked-in `src/pb/` |
-| Build dep | `prost-build` | none — `buf` generates, not cargo |
+| Codegen | `substreams protogen` wrote a temporary `buf.gen.yaml` for the prost plugin and deleted it after | a checked-in `buf.gen.yaml` pins the buffa plugin |
+| Generated code | `OUT_DIR`, rebuilt every `cargo build` | checked in under `src/pb/`, regenerated on demand |
 | Singular message field | `Option<T>`, unwrap to read | `MessageField<T>`, derefs to a default |
 | Enum field | `i32`, compare with `as i32` | `EnumValue<E>`, compare with the variant |
 | Encoding | returns `Result` | infallible |
@@ -127,8 +127,8 @@ pub mod myproject {
 
 Buffa does ship a generator for that file (`protoc-gen-buffa-packaging`) but publishes it only to
 crates.io, not the BSR — using it would mean every developer installs a binary locally, so we
-hand-write it instead. Add `**/.last_generated_hash` to `.gitignore`; `buf` writes it and does not
-ignore it for you.
+hand-write it instead. Add `**/.last_generated_hash` to `.gitignore`; `substreams build` and `substreams protogen` write
+it to skip regeneration when nothing changed, and neither ignores it for you.
 
 ```bash
 substreams protogen  # Proto bindings only (fast iteration)

@@ -55,7 +55,7 @@ This skill documents the buffa stack. On the prost stack these differ:
 | | prost (≤ 0.7) | buffa (0.8+) |
 |---|---|---|
 | Codegen | `substreams protogen` wrote a temporary `buf.gen.yaml` for the prost plugin and deleted it after | a checked-in `buf.gen.yaml` pins the buffa plugin |
-| Generated code | `OUT_DIR`, rebuilt every `cargo build` | checked in under `src/pb/`, regenerated on demand |
+| Generated code | `src/pb/`, or `OUT_DIR` for a project that ran `prost_build` from its own `build.rs` | checked in under `src/pb/`, regenerated on demand |
 | Singular message field | `Option<T>`, unwrap to read | `MessageField<T>`, derefs to a default |
 | Enum field | `i32`, compare with `as i32` | `EnumValue<E>`, compare with the variant |
 | Encoding | returns `Result` | infallible |
@@ -128,8 +128,9 @@ pub mod myproject {
 
 The first line is an ownership marker. A `mod.rs` that does not start with it is treated as
 someone else's and left untouched, so a project that already hand-writes the file keeps it. Commit
-what the CLI writes. Add `**/.last_generated_hash` to `.gitignore`; both commands write it to skip
-regeneration when nothing changed, and neither ignores it for you.
+what the CLI writes. Add `**/.last_generated_hash` to `.gitignore`; `substreams build` and
+`substreams protogen` write it themselves, to skip regeneration when nothing changed without going
+back to `buf`, and neither ignores it for you.
 
 ```bash
 substreams protogen  # Proto bindings only (fast iteration)

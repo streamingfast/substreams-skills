@@ -203,14 +203,14 @@ Details: [references/loops-and-filters.md](./references/loops-and-filters.md).
 
 | Pair | When |
 |---|---|
-| `substreams = "0.8.0-beta"` + `substreams-solana = "0.16.0-beta.1"` | **Default** — buffa-generated protobuf types |
+| `substreams = "0.8.0"` + `substreams-solana = "0.16.0"` | **Default** — buffa-generated protobuf types |
 | `substreams = "0.7"` + `substreams-solana = "0.15"` | Existing packages still on prost |
 | `substreams = "0.6"` + `substreams-solana = "0.14"` | Legacy packages / examples that still pin 0.14.x |
 
 ```toml
 [dependencies]
-substreams = "0.8.0-beta"
-substreams-solana = "0.16.0-beta.1"
+substreams = "0.8.0"
+substreams-solana = "0.16.0"
 bs58 = "0.4"
 buffa = { version = "0.9", default-features = false, features = ["std", "fast-utf8"] }
 buffa-types = { version = "0.9", default-features = false }
@@ -225,14 +225,14 @@ opt-level = "s"
 strip = "debuginfo"
 ```
 
-**Keep the pair matched.** `substreams-solana` declares the `substreams` version it was built against (`0.16.0-beta` → `substreams ^0.8.0-beta`; `0.15` → `^0.7`; `0.14.3` → `^0.6`). Pin the row above rather than mixing majors. The 0.16 line generates buffa types; the 0.15 and 0.14 lines generate prost types, and the two do not interoperate.
+**Keep the pair matched.** `substreams-solana` declares the `substreams` version it was built against (`0.16.0` → `substreams ^0.8.0`; `0.15` → `^0.7`; `0.14.3` → `^0.6`). Pin the row above rather than mixing majors. The 0.16 line generates buffa types; the 0.15 and 0.14 lines generate prost types, and the two do not interoperate.
 
 **Mix-major scenarios (do not treat as “always link-error”):**
 
 | What you mixed | What actually happens |
 |---|---|
 | `substreams 0.6` + `substreams-solana 0.15`, or `0.7` + `0.14` | Cargo still **builds** — it silently pulls **two** `substreams` copies into the tree. A green build is *not* proof the pins are right; `cargo tree \| grep substreams` should show **one** version. |
-| A buffa row (`0.8.0-beta` + `0.16.0-beta`) mixed with a prost row, or `substreams-database-change` 4 on a `substreams 0.6` tree | Often real **link / type** failures — clean with `rm -rf target && substreams build` after realigning. |
+| A buffa row (`0.8.0` + `0.16.0`) mixed with a prost row, or `substreams-database-change` 4 on a `substreams 0.6` tree | Often real **link / type** failures — clean with `rm -rf target && substreams build` after realigning. |
 
 Re-check [crates.io/crates/substreams-solana](https://crates.io/crates/substreams-solana) before assuming these pins forever.
 
@@ -257,8 +257,7 @@ plugins:
 
 `substreams build` generates `src/pb/` as part of the build, so that is the command to reach for;
 `substreams protogen` does the codegen step alone when you only want the bindings refreshed. Commit
-what it writes and wire it up with a hand-written `src/pb/mod.rs` (see **`substreams-dev`** for the
-module tree):
+what it writes, `src/pb/mod.rs` included (see **`substreams-dev`** for the module tree):
 
 ```rust
 // src/lib.rs
@@ -461,7 +460,7 @@ After generators, still enforce pre-flight instruction list and account filters 
 
 ## Examples in this repo
 
-Examples T5.x / T6.2 pin the default buffa pair (`substreams 0.8.0-beta` + `substreams-solana 0.16.0-beta.1`), the same row new projects should use.
+Examples T5.x / T6.2 pin the default buffa pair (`substreams 0.8.0` + `substreams-solana 0.16.0`), the same row new projects should use.
 
 | Example | Pattern |
 |---|---|

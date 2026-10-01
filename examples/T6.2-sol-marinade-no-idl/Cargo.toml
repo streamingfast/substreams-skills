@@ -7,8 +7,8 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-substreams = "0.8.0-beta"
-substreams-solana = "0.16.0-beta.1"
+substreams = "0.8.0"
+substreams-solana = "0.16.0"
 buffa = { version = "0.9", default-features = false, features = ["std", "fast-utf8"] }
 buffa-types = { version = "0.9", default-features = false }
 

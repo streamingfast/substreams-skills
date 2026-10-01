@@ -388,9 +388,9 @@ dependencies = [
 
 [[package]]
 name = "substreams"
-version = "0.8.0-beta"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aaef81ed6637d159f8e55ca4b2def8b6023807d121589969ce4627256de1f33a"
+checksum = "c2191a986c9f1177ae5eb9b6f8881e0615fee7ccf84f0c0438c4a2d10bac85b5"
 dependencies = [
  "anyhow",
  "bigdecimal",
@@ -411,9 +411,9 @@ dependencies = [
 
 [[package]]
 name = "substreams-macro"
-version = "0.8.0-beta"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90d8ab968b9449ab3c7b9514c73f328a43294bca0cc0f1bf7f31f63e4b25723d"
+checksum = "7d473bf3565300988e84da91727d9b3a1626509983b9aa767ffba16fb22f3a22"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -423,9 +423,9 @@ dependencies = [
 
 [[package]]
 name = "substreams-solana"
-version = "0.16.0-beta.1"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2219cc5159c05fd71a952b46a3600192b2fcc320fbfc7bfaf1adcf241582bef"
+checksum = "97a91c5170f59aa32eb0ee72b96076e9a9da1d5d3921df01a171934f0b75f9b5"
 dependencies = [
  "substreams-solana-core",
  "substreams-solana-macro",
@@ -433,9 +433,9 @@ dependencies = [
 
 [[package]]
 name = "substreams-solana-core"
-version = "0.16.0-beta.1"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0d694936660f181ee8b6840a35f587dc6e7da5b57fe9f71c2aa5590c0b7349f"
+checksum = "cc8a0bc9df137cea6398f6474760e62b3a842f82755452a0709bf7ee668b2238"
 dependencies = [
  "bs58",
  "buffa",
@@ -444,9 +444,9 @@ dependencies = [
 
 [[package]]
 name = "substreams-solana-macro"
-version = "0.16.0-beta.1"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f978ed1151e57caa64b0effe23b0d594f7505c91564a2887f633516c6f8a524"
+checksum = "02aad9a01bcd2e45debef56480e8f377757547c55e7d92e5c83b68710403ee12"
 dependencies = [
  "bs58",
 ]

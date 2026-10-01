@@ -24,14 +24,14 @@ There is **no** store mock API. Test pure key/value logic; exercise stores via C
 
 ```toml
 [dependencies]
-substreams = "0.8.0-beta"
+substreams = "0.8.0"
 # Generated code names `::buffa` at the crate root, so declare both even though
 # `substreams` re-exports them.
 buffa = { version = "0.9", default-features = false, features = ["std", "fast-utf8"] }
 buffa-types = { version = "0.9", default-features = false }
 # chain package as needed:
-substreams-ethereum = "0.12.0-beta.1"
-# substreams-solana = "0.16.0-beta.1"
+substreams-ethereum = "0.12.0"
+# substreams-solana = "0.16.0"
 
 [dev-dependencies]
 hex = "0.4"

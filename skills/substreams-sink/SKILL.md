@@ -86,7 +86,7 @@ Before writing a `graph_out` or `db_out` module, choose the correct output proto
 | You want to write to... | Output proto type | Crate / proto package | When to use |
 |---|---|---|---|
 | **The Graph (subgraph entities)** | `sf.substreams.sink.entity.v1.EntityChanges` | `substreams-entity-change` (BROKEN — see below) | `graph_out` modules feeding a Graph Node, hosted subgraph, or `substreams-sink-subgraph` |
-| **Postgres / ClickHouse / SQL DB** | `sf.substreams.sink.database.v1.DatabaseChanges` | `substreams-database-change = "5.0.0-beta.1"` | `db_out` modules feeding `substreams sink postgres`/`clickhouse` or hosted SQL sink |
+| **Postgres / ClickHouse / SQL DB** | `sf.substreams.sink.database.v1.DatabaseChanges` | `substreams-database-change = "5.0.0"` | `db_out` modules feeding `substreams sink postgres`/`clickhouse` or hosted SQL sink |
 | **Custom sink (Go/Rust consumer)** | Your own proto type | n/a | Bespoke consumers reading raw module output |
 
 **Rule**: never use `DatabaseChanges` for graph-out, never use `EntityChanges` for SQL sinks. They are not interchangeable. Acceptance tests in eval corpus auto-zero on wrong proto type.
@@ -95,7 +95,7 @@ Before writing a `graph_out` or `db_out` module, choose the correct output proto
 
 > **Blocker — read before adding `substreams-entity-change`.**
 
-Do **not** rely on the `substreams-entity-change` crate for modern `substreams = "0.8.0-beta"` pipelines:
+Do **not** rely on the `substreams-entity-change` crate for modern `substreams = "0.8.0"` pipelines:
 - **v1** pins `prost = "0.11"` / `substreams = "0.5"` → its generated types are prost types, which do not interoperate with the buffa types the current toolchain generates.
 - **v2.0.0** has `prost ^0.13` but still depends on **`substreams ^0.6`**, so it does not drop cleanly into a modern tree either.
 
@@ -229,7 +229,7 @@ pub fn graph_out(events: Events) -> Result<EntityChanges, substreams::errors::Er
 
 **Do NOT** add `substreams-entity-change` to `Cargo.toml`. The crate is deprecated and no longer supported by `graph-node`; the generated proto code is sufficient, and adding the crate drags prost-generated types back in alongside the buffa ones.
 
-> **For SQL sinks** (Postgres / ClickHouse / `db_out`), use `substreams-database-change = "5.0.0-beta.1"` — see `substreams-sql/SKILL.md`. Those crates ARE compatible with the current toolchain. Do NOT inline `DatabaseChanges` proto and call your module `graph_out` — that mixes sink types and the run will fail (or worse, succeed silently with garbage data).
+> **For SQL sinks** (Postgres / ClickHouse / `db_out`), use `substreams-database-change = "5.0.0"` — see `substreams-sql/SKILL.md`. Those crates ARE compatible with the current toolchain. Do NOT inline `DatabaseChanges` proto and call your module `graph_out` — that mixes sink types and the run will fail (or worse, succeed silently with garbage data).
 
 ## Language Recommendations
 

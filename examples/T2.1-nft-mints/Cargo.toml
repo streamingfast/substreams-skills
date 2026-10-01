@@ -9,8 +9,8 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-substreams = "0.8.0-beta"
-substreams-ethereum = "0.12.0-beta.1"
+substreams = "0.8.0"
+substreams-ethereum = "0.12.0"
 buffa = { version = "0.9", default-features = false, features = ["std", "fast-utf8"] }
 buffa-types = { version = "0.9", default-features = false }
 hex = "0.4"

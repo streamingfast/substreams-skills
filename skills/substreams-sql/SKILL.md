@@ -160,7 +160,7 @@ package:
   description: SQL sink substreams for <protocol>
 
 imports:
-  database: https://github.com/streamingfast/substreams-sink-database-changes/releases/download/v5.0.0-beta.1/substreams-sink-database-changes-v5.0.0-beta.1.spkg
+  database: https://github.com/streamingfast/substreams-sink-database-changes/releases/download/v5.0.0/substreams-sink-database-changes-v5.0.0.spkg
   sql: https://github.com/streamingfast/substreams-sink-sql/releases/download/protodefs-v1.0.7/substreams-sink-sql-protodefs-v1.0.7.spkg
 
 protobuf:
@@ -191,8 +191,8 @@ sink:
 
 ```toml
 [dependencies]
-substreams = "0.8.0-beta"
-substreams-database-change = "5.0.0-beta.1"
+substreams = "0.8.0"
+substreams-database-change = "5.0.0"
 buffa = { version = "0.9", default-features = false, features = ["std", "fast-utf8"] }
 buffa-types = { version = "0.9", default-features = false }
 ```

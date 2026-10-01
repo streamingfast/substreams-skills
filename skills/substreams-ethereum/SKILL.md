@@ -153,15 +153,15 @@ Details: [references/abi-codegen.md](./references/abi-codegen.md).
 
 ```toml
 [dependencies]
-substreams = "0.8.0-beta"
-substreams-ethereum = "0.12.0-beta.1"
+substreams = "0.8.0"
+substreams-ethereum = "0.12.0"
 buffa = { version = "0.9", default-features = false, features = ["std", "fast-utf8"] }
 buffa-types = { version = "0.9", default-features = false }
 hex = "0.4"
 hex-literal = "0.4"          # hyphen in Cargo.toml, underscore in `use hex_literal::hex`
 
 [build-dependencies]
-substreams-ethereum = "0.12.0-beta.1" # REQUIRED for Abigen in build.rs
+substreams-ethereum = "0.12.0" # REQUIRED for Abigen in build.rs
 buffa-build = "0.9"                   # REQUIRED for domain protobuf codegen in build.rs
 
 [lib]

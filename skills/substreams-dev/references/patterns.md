@@ -174,7 +174,7 @@ pub fn map_enriched_events(
         let metadata = metadata.get_last(&metadata_key);
         
         enriched.items.push(EnrichedEvent {
-            event: Some(event),
+            event: event.into(),
             metadata,
         });
     }

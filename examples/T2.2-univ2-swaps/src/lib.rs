@@ -1,11 +1,5 @@
 mod abi;
-mod pb {
-    pub mod uniswap {
-        pub mod v2 {
-            include!(concat!(env!("OUT_DIR"), "/uniswap.v2.rs"));
-        }
-    }
-}
+mod pb;
 
 use std::str::FromStr;
 

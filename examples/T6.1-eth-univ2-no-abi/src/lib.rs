@@ -1,12 +1,4 @@
-mod pb {
-    pub mod univ2 {
-        pub mod swaps {
-            pub mod v1 {
-                include!(concat!(env!("OUT_DIR"), "/univ2.swaps.v1.rs"));
-            }
-        }
-    }
-}
+mod pb;
 
 use substreams::errors::Error;
 use substreams_ethereum::pb::eth::v2::Block;

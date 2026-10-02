@@ -122,10 +122,13 @@ use substreams::store::{StoreNew, StoreSetIfNotExists};
 pub fn store_pool_tokens(pairs: PoolTokenPairs, store: StoreSetIfNotExistsProto<TokenPair>) {
     for entry in pairs.entries {
         // ord is u64; value is passed by reference
-        store.set_if_not_exists(0, &entry.pool, entry.tokens.as_ref().unwrap());
+        let Some(tokens) = entry.tokens.as_option() else { continue };
+        store.set_if_not_exists(0, &entry.pool, tokens);
     }
 }
 ```
+
+`entry.tokens` is a `MessageField<TokenPair>`, not an `Option`. It derefs, so `&entry.tokens` also compiles — but it writes a **default** `TokenPair` for an unset field instead of skipping it, poisoning the cache for that pool forever (`set_if_not_exists` never overwrites). Check with `.as_option()` when the absent case must not be stored.
 
 `set_if_not_exists` is the point: the first block that sees a pool pays the RPC, every later block reads the store for free.
 

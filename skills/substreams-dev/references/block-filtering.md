@@ -135,12 +135,12 @@ use crate::pb::sf::substreams::index::v1::Keys;
 fn index_events(events: Events) -> Result<Keys, Error> {
     let mut keys = Keys::default();
     for e in events.events {
-        if let Some(log) = e.log {
+        if e.log.is_set() {
             // signature (topic0) and contract address as keys
-            if let Some(topic0) = log.topics.get(0) {
+            if let Some(topic0) = e.log.topics.get(0) {
                 keys.keys.push(format!("evt_sig:0x{}", Hex::encode(topic0)));
             }
-            keys.keys.push(format!("evt_addr:0x{}", Hex::encode(&log.address)));
+            keys.keys.push(format!("evt_addr:0x{}", Hex::encode(&e.log.address)));
         }
     }
     Ok(keys)

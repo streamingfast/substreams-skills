@@ -1,24 +1,5 @@
 mod abi;
-mod pb {
-    pub mod dex {
-        pub mod volume {
-            pub mod v1 {
-                include!(concat!(env!("OUT_DIR"), "/dex.volume.v1.rs"));
-            }
-        }
-    }
-    pub mod sf {
-        pub mod substreams {
-            pub mod sink {
-                pub mod entity {
-                    pub mod v1 {
-                        include!(concat!(env!("OUT_DIR"), "/sf.substreams.sink.entity.v1.rs"));
-                    }
-                }
-            }
-        }
-    }
-}
+mod pb;
 
 use std::collections::HashSet;
 
@@ -149,7 +130,7 @@ fn bigdecimal_value(s: &str) -> Value {
 }
 
 fn make_field(name: &str, value: Value) -> Field {
-    Field { name: name.to_string(), new_value: Some(value) }
+    Field { name: name.to_string(), new_value: value.into() }
 }
 
 // ─── Module 1: map_pool_tokens ────────────────────────────────────────────────
@@ -194,14 +175,15 @@ pub fn map_pool_tokens(block: eth::Block) -> Result<PoolTokenPairs, Error> {
 
             result.entries.push(PoolTokenEntry {
                 key,
-                pair: Some(TokenPair {
+                pair: TokenPair {
                     token0_address: addr_hex(&t0_bytes),
                     token0_symbol: t0_symbol,
                     token0_decimals: t0_decimals,
                     token1_address: addr_hex(&t1_bytes),
                     token1_symbol: t1_symbol,
                     token1_decimals: t1_decimals,
-                }),
+                }
+                .into(),
             });
         }
     }
@@ -216,7 +198,7 @@ pub fn map_pool_tokens(block: eth::Block) -> Result<PoolTokenPairs, Error> {
 #[substreams::handlers::store]
 pub fn store_pool_tokens(pairs: PoolTokenPairs, store: StoreSetIfNotExistsProto<TokenPair>) {
     for entry in pairs.entries {
-        if let Some(pair) = entry.pair {
+        if let Some(pair) = entry.pair.into_option() {
             store.set_if_not_exists(0, &entry.key, &pair);
         }
     }
@@ -233,12 +215,7 @@ pub fn map_v2_swaps(
     let mut out = SwapVolumes::default();
     let protocol = "v2";
 
-    let timestamp = block
-        .header
-        .as_ref()
-        .and_then(|h| h.timestamp.as_ref())
-        .map(|t| t.seconds as u64)
-        .unwrap_or(0);
+    let timestamp = block.header.timestamp.seconds as u64;
     let day_bucket = timestamp / 86400;
 
     for trx in block.transactions() {
@@ -295,12 +272,7 @@ pub fn map_v3_swaps(
     let mut out = SwapVolumes::default();
     let protocol = "v3";
 
-    let timestamp = block
-        .header
-        .as_ref()
-        .and_then(|h| h.timestamp.as_ref())
-        .map(|t| t.seconds as u64)
-        .unwrap_or(0);
+    let timestamp = block.header.timestamp.seconds as u64;
     let day_bucket = timestamp / 86400;
 
     for trx in block.transactions() {
@@ -410,7 +382,7 @@ pub fn graph_out(
                 entity: "PoolDayVolume".to_string(),
                 id: key.clone(),
                 ordinal: 0,
-                operation: Operation::Create as i32,
+                operation: Operation::Create.into(),
                 fields: vec![
                     make_field("id", string_value(key)),
                     make_field("pool", string_value(pool)),
@@ -424,7 +396,7 @@ pub fn graph_out(
                 entity: "PoolDayVolume".to_string(),
                 id: key.clone(),
                 ordinal: 0,
-                operation: Operation::Update as i32,
+                operation: Operation::Update.into(),
                 fields: vec![
                     make_field("volumeToken1", bigdecimal_value(&new_volume)),
                 ],

@@ -1,3 +1,8 @@
 fn main() {
-    prost_build::compile_protos(&["proto/usdc_transfers.proto"], &["proto/"]).unwrap();
+    buffa_build::Config::new()
+        .files(&["proto/usdc_transfers.proto"])
+        .includes(&["proto/"])
+        .preserve_unknown_fields(false)
+        .compile()
+        .unwrap();
 }

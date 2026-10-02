@@ -142,7 +142,7 @@ pub fn map_enriched(
         let metadata = metadata_store.get_last(&key);
         
         enriched.items.push(EnrichedTransfer {
-            transfer: Some(transfer),
+            transfer: transfer.into(),
             metadata,
         });
     }

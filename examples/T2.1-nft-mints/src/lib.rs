@@ -1,12 +1,4 @@
-mod pb {
-    pub mod nft {
-        pub mod mints {
-            pub mod v1 {
-                include!(concat!(env!("OUT_DIR"), "/nft.mints.v1.rs"));
-            }
-        }
-    }
-}
+mod pb;
 
 use substreams::errors::Error;
 use substreams_ethereum::pb::eth::v2::Block;
@@ -63,42 +55,40 @@ pub fn map_nft_mints(block: Block) -> Result<NftMints, Error> {
     for trx in block.transaction_traces.iter() {
         let tx_hash = format!("0x{}", hex::encode(&trx.hash));
 
-        for receipt in trx.receipt.iter() {
-            for log in receipt.logs.iter() {
-                // ERC721 Transfer has exactly 4 topics:
-                //   topics[0] = event sig (Transfer)
-                //   topics[1] = from (indexed address)
-                //   topics[2] = to (indexed address)
-                //   topics[3] = tokenId (indexed uint256)
-                // ERC20 Transfer has 3 topics (value is NOT indexed, goes into data).
-                // We MUST check topic count == 4 to avoid treating ERC20 transfers as ERC721.
-                if log.topics.len() != 4 {
-                    continue;
-                }
-
-                // topic0 must be Transfer event signature
-                if hex::encode(&log.topics[0]) != TRANSFER_TOPIC {
-                    continue;
-                }
-
-                // Mint condition: from == zero address (topics[1] is 32-byte ABI-encoded address)
-                if log.topics[1] != ZERO_ADDRESS_TOPIC {
-                    continue;
-                }
-
-                let contract = format!("0x{}", hex::encode(&log.address));
-                let minter = decode_address(&log.topics[2]);
-                let token_id = decode_uint256_decimal(&log.topics[3]);
-
-                result.mints.push(NftMint {
-                    contract,
-                    token_id,
-                    minter,
-                    tx_hash: tx_hash.clone(),
-                    log_index: log.index as u64,
-                    block_number,
-                });
+        for log in trx.receipt.logs.iter() {
+            // ERC721 Transfer has exactly 4 topics:
+            //   topics[0] = event sig (Transfer)
+            //   topics[1] = from (indexed address)
+            //   topics[2] = to (indexed address)
+            //   topics[3] = tokenId (indexed uint256)
+            // ERC20 Transfer has 3 topics (value is NOT indexed, goes into data).
+            // We MUST check topic count == 4 to avoid treating ERC20 transfers as ERC721.
+            if log.topics.len() != 4 {
+                continue;
             }
+
+            // topic0 must be Transfer event signature
+            if hex::encode(&log.topics[0]) != TRANSFER_TOPIC {
+                continue;
+            }
+
+            // Mint condition: from == zero address (topics[1] is 32-byte ABI-encoded address)
+            if log.topics[1] != ZERO_ADDRESS_TOPIC {
+                continue;
+            }
+
+            let contract = format!("0x{}", hex::encode(&log.address));
+            let minter = decode_address(&log.topics[2]);
+            let token_id = decode_uint256_decimal(&log.topics[3]);
+
+            result.mints.push(NftMint {
+                contract,
+                token_id,
+                minter,
+                tx_hash: tx_hash.clone(),
+                log_index: log.index as u64,
+                block_number,
+            });
         }
     }
 

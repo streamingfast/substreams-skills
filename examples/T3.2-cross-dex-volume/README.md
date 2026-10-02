@@ -21,7 +21,7 @@ Multi-paragraph prompt with a strict entity schema:
 
 - **Embedded `EntityChanges` proto** — agents previously hallucinated `sf.substreams.sink.subgraph.v1.DatabaseChanges` (mixing graph-out package with SQL sink message). Skill now embeds the literal `.proto` content for `sf.substreams.sink.entity.v1.EntityChanges` so agents copy verbatim.
 - **`initialBlock` semantics** — `initialBlock = max(--start-block, manifest.initialBlock)`. Pin to test range, not protocol genesis (V3 factory at 12369621 → 5.6M-block backfill).
-- **`substreams-entity-change` crate workaround** — crate is locked to `prost = "0.11"` and `substreams = "0.5"`; modern stack uses `prost = "0.13"` and `substreams = "0.7"`. Skill embeds the proto inline rather than importing the broken crate.
+- **`substreams-entity-change` crate workaround** — crate is locked to an old `substreams` and still builds on `prost`. Skill embeds the proto inline rather than importing the broken crate.
 - Multi-source module pattern (V2 + V3 swap events feeding the same store).
 
 ## Files
@@ -42,4 +42,4 @@ substreams run ./substreams.yaml graph_out -s 18000000 -t +100 -o jsonl
 
 ## Notes
 
-The `EntityChanges` proto is embedded in this example because the upstream `substreams-entity-change` crate is unmaintained on the modern toolchain. Once a 2.x release lands on `prost = "0.13"`, the embedded proto can be removed.
+The `EntityChanges` proto is embedded in this example because the upstream `substreams-entity-change` crate is unmaintained on the modern toolchain. Once a release lands on buffa, the embedded proto can be removed.

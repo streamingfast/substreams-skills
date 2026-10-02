@@ -1,24 +1,11 @@
-fn main() {
-    substreams_ethereum::Abigen::new("UniswapV2Pair", "abi/uniswap_v2_pair.json")
-        .expect("Failed to load Uniswap V2 Pair ABI")
-        .generate()
-        .expect("Failed to generate Uniswap V2 Pair bindings")
-        .write_to_file("src/abi/uniswap_v2_pair.rs")
-        .expect("Failed to write Uniswap V2 Pair bindings");
+use substreams_ethereum::Abigen;
 
-    substreams_ethereum::Abigen::new("UniswapV3Pool", "abi/uniswap_v3_pool.json")
-        .expect("Failed to load Uniswap V3 Pool ABI")
-        .generate()
-        .expect("Failed to generate Uniswap V3 Pool bindings")
-        .write_to_file("src/abi/uniswap_v3_pool.rs")
-        .expect("Failed to write Uniswap V3 Pool bindings");
+fn main() -> Result<(), anyhow::Error> {
 
-    substreams_ethereum::Abigen::new("Erc20", "abi/erc20.json")
-        .expect("Failed to load ERC20 ABI")
-        .generate()
-        .expect("Failed to generate ERC20 bindings")
-        .write_to_file("src/abi/erc20.rs")
-        .expect("Failed to write ERC20 bindings");
-
-    prost_build::compile_protos(&["proto/dex_volume.proto", "proto/entity.proto"], &["proto/"]).unwrap();
+    for name in ["erc20", "uniswap_v2_pair", "uniswap_v3_pool"] {
+        Abigen::new(name, &format!("abi/{}.json", name))?
+            .generate()?
+            .write_to_file(&format!("src/abi/{}.rs", name))?;
+    }
+    Ok(())
 }

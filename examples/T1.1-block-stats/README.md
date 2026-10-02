@@ -26,7 +26,7 @@ Per-block stats on Ethereum mainnet: block number, transaction count, total gas 
 
 - Manifest skeleton (`specVersion`, `network: mainnet`, `binaries`, single map module)
 - `sf.ethereum.type.v2.Block` source type + access patterns (`block.number`, `block.transactions`)
-- `prost-types` dependency callout (default Cargo.toml omits it; build fails without it)
+- `buffa` / `buffa-types` dependency callout (generated code names `::buffa` at the crate root, so the `substreams` re-export is not enough)
 
 ## Files
 

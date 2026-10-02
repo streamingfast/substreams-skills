@@ -38,10 +38,10 @@ fn main() {
         .expect("Failed to generate pool bindings")
         .write_to_file("src/abi/uniswap_v3_pool.rs")
         .expect("Failed to write pool bindings");
-
-    prost_build::compile_protos(&["proto/uniswap_v3.proto"], &["proto/"]).unwrap();
 }
 ```
+
+The same `build.rs` also generates the domain protobufs via `buffa_build`, into `OUT_DIR` — see the SKILL's *Protobuf codegen* section. ABI bindings are the part written into `src/`.
 
 `substreams-ethereum` must be in **`[build-dependencies]`** for this to compile, and in `[dependencies]` for the runtime trait. Generated files are written into `src/`, so they are compiled as normal modules — declare them in `src/abi/mod.rs` and add `mod abi;` to `lib.rs`.
 
@@ -144,7 +144,7 @@ Then decode by hand — see *Indexed vs non-indexed* below.
 
 ## Path 3 — Known signature
 
-For ERC-20/721/1155 and other standards, use the verified constants in [common-contracts.md](./common-contracts.md) with `ethabi` for the data words.
+For ERC-20/721/1155 and other standards, use the verified constants in [common-contracts.md](./common-contracts.md) and read the data words directly — a non-indexed `uint256` is a 32-byte big-endian slice of `log.data`, as T6.1 does.
 
 ## Indexed vs non-indexed — the core decoding rule
 
@@ -184,21 +184,10 @@ let amount1_in = word(&log.data, 1);
 
 Use `BigInt::from_signed_bytes_be` for `int256`/`int128` params (Uniswap V3 amounts), otherwise negative values decode as astronomically large positives.
 
-With `ethabi` for anything non-trivial (dynamic types, arrays, structs):
+For anything non-trivial — dynamic types, arrays, structs — generate bindings with Abigen rather than
+hand-decoding; that is what Path 1 is for.
 
-```rust
-use ethabi::{decode, ParamType};
-use substreams::errors::Error;   // alias for anyhow::Error — no extra dependency needed
-
-let decoded = decode(
-    &[ParamType::Uint(256), ParamType::Uint(256)],
-    &log.data,
-).map_err(|e| Error::msg(format!("decode failed: {e}")))?;
-```
-
-Requires `ethabi = "17"` in `Cargo.toml` — **not `18`**, which duplicates the stack `substreams-ethereum-core` already links (see SKILL.md). Don't reach for `anyhow::anyhow!` here unless you also declare `anyhow` yourself; `substreams::errors::Error` is already an `anyhow::Error` alias and needs no new dependency.
-
-Note `ethabi` is only optional on the **hand-decode** path — T6.1 rolls its own `uint256`→decimal conversion and declares no `ethabi`. On the **Abigen** path it is mandatory regardless of whether you call it yourself, because the generated module references it.
+Don't reach for `anyhow::anyhow!` here unless you also declare `anyhow` yourself; `substreams::errors::Error` is already an `anyhow::Error` alias and needs no new dependency.
 
 ### Gotchas
 

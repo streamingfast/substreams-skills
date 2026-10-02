@@ -2,13 +2,7 @@ use substreams::errors::Error;
 use substreams_solana::b58;
 use substreams_solana::pb::sf::solana::r#type::v1::Block;
 
-mod pb {
-    pub mod sol {
-        pub mod v1 {
-            include!(concat!(env!("OUT_DIR"), "/sol.v1.rs"));
-        }
-    }
-}
+mod pb;
 use pb::sol::v1::{Transfer, Transfers};
 
 // SPL Token program

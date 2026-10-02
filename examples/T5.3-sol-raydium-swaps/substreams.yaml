@@ -9,6 +9,9 @@ protobuf:
     - raydium/clmm/v1/swaps.proto
   importPaths:
     - ./proto
+  excludePaths:
+    - sf/substreams
+    - google
 
 binaries:
   default:

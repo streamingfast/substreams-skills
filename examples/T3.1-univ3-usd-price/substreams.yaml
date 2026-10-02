@@ -12,6 +12,9 @@ protobuf:
     - uniswap_v3.proto
   importPaths:
     - ./proto
+  excludePaths:
+    - sf/substreams
+    - google
 
 binaries:
   default:

@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [1.7.0](https://github.com/streamingfast/substreams-skills/releases/tag/v1.7.0)
 
 ### Changed
 

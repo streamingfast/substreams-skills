@@ -12,7 +12,7 @@ license: Apache-2.0
 compatibility:
   platforms: [claude-code, cursor, vscode, windsurf]
 metadata:
-  version: 1.6.0
+  version: 1.7.0
   author: StreamingFast
   documentation: https://docs.substreams.dev/how-to-guides/develop-your-own-substreams/ethereum
 ---
@@ -233,7 +233,7 @@ the SDK repos do since they pull block models from the BSR — see `substreams-d
 specVersion: v0.1.0
 package:
   name: my_eth_substreams
-  version: 1.6.0
+  version: 1.7.0
   url: https://github.com/myorg/my-eth-substreams   # set both — silences build warnings
   description: Decoded Uniswap V2 swaps on Ethereum mainnet
 network: mainnet

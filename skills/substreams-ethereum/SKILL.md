@@ -141,9 +141,12 @@ Deep dive: [references/abi-codegen.md](./references/abi-codegen.md).
 
 From contract address(es) + event(s):
 
-1. **In-module filter** — check `log.address` and `topics[0]` before decoding (cheapest reject).
-2. **Index module** (recommended when scanning large ranges) — emit keys like `contract:<hex>`, `event:<name>` so consumers skip empty blocks.
-3. **Foundational packages** — `substreams init` → **ethereum-common** for cached address/topic filters.
+1. **Block filter on the foundational index** (recommended whenever the contract is active in a minority of blocks) — keep `source: sf.ethereum.type.v2.Block` as the input and add `blockFilter: { module: ethereum_common:index_events, query: { string: "evt_addr:0x…" } }` (lowercase 0x hex; `evt_addr:`/`evt_sig:` keys; `index_calls` for `call_to:`/`call_method:`). The index is computed once for the whole chain and is likely already cached. Import as `ethereum_common: ethereum_common@v0.3.3` (CLI ≥ 1.20.0; older CLIs need `https://spkg.io/v1/packages/ethereum-common/v0.3.3`). See `substreams-dev` → `references/block-filtering.md`.
+2. **In-module filter** — `blockFilter` is block-level, so still check `log.address` and `topics[0]` **before decoding** (cheapest reject).
+3. **Own index module** — only when several of your modules filter on keys no foundational index has; an index runs on every block, so for one module it costs about the same as the in-module check.
+4. **`ethereum_common:filtered_events`** — alternative that returns only matching events (extra module, no tx context); you **must** override its default params.
+
+Keep the module count small: one extraction map reading the block, not one per event. Call `substreams::skip_empty_output()` when a block yields nothing.
 
 Details: [references/abi-codegen.md](./references/abi-codegen.md).
 
@@ -381,7 +384,7 @@ let decimals = RpcBatch::decode::<_, abi::erc20::functions::Decimals>(&batch.res
     .unwrap_or(18u32);
 ```
 
-**RPC is the top performance and correctness trap on EVM.** Rules:
+**RPC is the top performance and correctness trap on EVM.** An `eth_call` is a network request that blocks the block's processing until it returns, so it slows a run more than any computation. Before reaching for it: call only when you need the result (e.g. the first time you see a token); take data from execution traces (e.g. `storage_changes`) when possible; and read static data such as token `name`/`symbol`/`decimals` from the **ERC20 Token Metadata Foundational Store** (`- foundational-store: erc20-token-metadata@v0.1.0` input) where it is deployed — the docs list **Ethereum mainnet only** (other networks: ask on Discord), so elsewhere keep the cache-store pattern below. Rules:
 
 1. **Batch** related calls into one `RpcBatch` — never one `execute()` / `.call()` per field.
 2. **Cache in a `set_if_not_exists` store**, keyed by address — pay the RPC once per contract, not once per block. **Never a `HashMap` inside a map handler**: it is rebuilt every block and re-issues every call.

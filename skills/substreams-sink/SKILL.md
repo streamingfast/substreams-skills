@@ -543,6 +543,8 @@ Jitter: Add random 0-100ms
 | Performance | Optimized | Debug-friendly |
 | Use case | Sinks | Testing, debugging |
 
+Production mode is also the only mode that reads and writes the module cache (development mode re-executes the WASM every time).
+
 **Always use production mode for sinks:**
 
 | Language | How |
@@ -553,6 +555,11 @@ Jitter: Add random 0-100ms
 | Go | already the default — see below |
 
 In Go, production mode is already the **default** with `sink.NewFromViper` — just do not pass `--development-mode`. (There is no `sink.WithProductionMode()`; the `sink.With*` options do not include one, and all of them are deprecated in favour of configuring `SinkerConfig` via `sink.NewFromConfig`.)
+
+### Protocol versions and partial blocks (Flashblocks)
+
+- **RPC protocol:** v4 (`sf.substreams.rpc.v4.Stream/Blocks`, default since CLI/server v1.18.0) batches several `BlockScopedData` into one `BlockScopedDatas` response; the client library unpacks it, so sink handlers are unchanged. Clients fall back v4 → v3 → v2 automatically (`--protocol-version` forces one). S2 is the default compression. A pure-gRPC client is ~15% faster than Connect — keep `createGrpcTransport` / Go / Rust.
+- **Partial blocks (beta, Base Mainnet only):** set `partial_blocks=true` (CLI `--partial-blocks`, Go `sink.FlagPartialBlocks`; CLI/library > v1.17.9). Flashblocks arrive every ~200 ms as `BlockScopedData` with `is_partial=true`, `partial_index`, `is_last_partial`; the module re-runs on small increments of the same block. Rules: **no block-level aggregation** in modules (work inside `transactionTraces`), **never key on the block hash** until a full block or `is_last_partial` arrives, and expect an `UNDO` only on a real reorg or when partials are discarded. Supported by the `webhook` sink and the Go SDK; **not** the SQL sink (it would cause too many undo operations).
 
 ## Common Endpoints
 

@@ -114,6 +114,8 @@ pub fn store_contract_registry(
 
 ### Producer-Consumer Pattern
 
+> **Keep the module count small.** Every module copies its inputs into WASM and reads/writes its output through the cache on every block. Extract everything in **one** top-level map and fan out only where another package will reuse an output. Do not add a map per event type or chains of stores that read stores (each store stage is another full pass over every segment). See [performance.md](./performance.md).
+
 ```yaml
 # Producer module
 - name: map_raw_events

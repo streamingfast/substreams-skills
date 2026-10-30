@@ -445,7 +445,7 @@ pub fn store_totals(events: Events, store: StoreAddInt64) {
 * **Add a `blockFilter`** to skip irrelevant blocks — by far the biggest cost lever (see above)
 * **Minimize store size** — store only what you need
 * **`--production-mode`** enables parallel execution for large ranges
-* **Module granularity** — smaller, focused modules perform better; avoid deep dependency nesting
+* **Module count** — keep it small: one extraction map that reads the block; split a module only when other packages will reuse its output. Avoid store-reads-store chains (each is another full pass per segment). Full guidance: `substreams-dev` → `references/performance.md`
 
 ### Avoid cloning large structures
 

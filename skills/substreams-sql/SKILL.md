@@ -149,6 +149,8 @@ tables.upsert_row("aggregates", [("day", day.as_str()), ("token", token.as_str()
 
 **Trait bounds differ — the main footgun.** `add`/`sub` need `NumericAddable` (`String`, `&str`, ints, `BigDecimal`/`BigInt` and refs — but **not `&String`**, so pass `value.as_str()`). `max`/`min` need `NumericComparable`, which is **not** implemented for `String`/`&str`. `add`/`sub` also panic at runtime on non-numeric strings, and mixing incompatible ops on one column (e.g. `max` then `add`) panics. Ordinals are auto-managed.
 
+**Delta op sequences must be valid per field.** An invalid `UpdateOp` sequence on one field within a batch (e.g. `add` after `max`) stops the sink with an error. Composite primary keys are applied per row even when a key value contains `/` (fixed upstream; older sinks merged `(a/b, c)` and `(a, b/c)` into one row — upgrade if you see rows missing or rejected as duplicates).
+
 ### Manifest
 
 ```yaml

@@ -142,7 +142,7 @@ export function handleTransfer(event: TransferEvent): void {
 >
 > ```yaml
 > imports:
->   # Full spkg URL — short form ethereum_common@v0.3.3 does not resolve via the CLI
+>   # Full spkg URL — works on every CLI. CLI ≥ 1.20.0 also accepts the short form `ethereum_common@v0.3.3`
 >   eth_common: https://spkg.io/v1/packages/ethereum-common/v0.3.3
 >
 > modules:
@@ -166,7 +166,7 @@ export function handleTransfer(event: TransferEvent): void {
 > the `substreams-dev` skill's `references/block-filtering.md`.
 >
 > The in-handler address check shown below is a fallback for when no foundational
-> `filtered_*` module covers your use case. When depending on `eth_common:filtered_events`,
+> `filtered_*` module covers your use case. (Docs-preferred alternative with fewer modules: take `sf.ethereum.type.v2.Block` as input and add `blockFilter: { module: eth_common:index_events, query: { string: "evt_addr:0x…" } }`; then keep the in-handler address check, since the filter is block-level.) When depending on `eth_common:filtered_events`,
 > you do **not** need an in-handler address check — the module has already filtered for you.
 >
 > **Decoding quality (EVM):** prefer the `substreams-ethereum` skill loop —
@@ -547,7 +547,7 @@ sink:
 | `BigDecimal.plus()` across blocks | `store` with `updatePolicy: add` and `valueType: bigdecimal`, or Postgres delta `.add` |
 | `entity.save()` on every event | Explicit `create_row` / `update_row` / `upsert_row` in `db_out` (SQL-first). Do **not** route new migrations through `graph_out` |
 | Assuming `update_row` auto-creates | It does **not** — use `upsert_row` or `create_row` when the row may not exist |
-| `ethereum_common@v…` import 404 | Use full URL `https://spkg.io/v1/packages/ethereum-common/v0.3.3` |
+| `ethereum_common@v…` import fails (`package does not exist on the Substreams registry`) — CLI older than 1.20.0 | Upgrade the CLI, or use the full URL `https://spkg.io/v1/packages/ethereum-common/v0.3.3` |
 | Old standalone `substreams-sink-sql run <dsn> <manifest>` form | CLI is `substreams sink postgres <manifest> [<module>] --dsn <dsn> [-s/-t]` (no `run`); module defaults to `sink: module:`, and `setup` takes a manifest only |
 | Subgraph grafting (resume from snapshot) | No equivalent in Substreams — `initialBlock` is the only start point. Set it to the contract deployment block; there is no way to resume from a prior subgraph deployment's state. Plan for a full backfill from `initialBlock`. |
 

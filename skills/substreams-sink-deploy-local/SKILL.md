@@ -240,6 +240,12 @@ Also: `tools cursor read` / `tools cursor write` for operators. Wiping the curso
 - **ClickHouse / buffered path**: non-zero `--undo-buffer-size` delays writes until N confirmations (no in-DB undo). **Required for Database Changes on ClickHouse**: with the default `0` the sink refuses to start (`driver clickhouse does not support reorg handling. You must use set a non-zero undo-buffer-size`). From-proto on ClickHouse does not need it.
 - Never-uncommitted data (accounting): Postgres CDC **or** `--final-blocks-only`.
 
+### Standby sinks and stall detection (Postgres, Database Changes)
+
+One writer per cursor: each flush locks the cursor row and checks it still holds the cursor this sink last read or wrote, otherwise it rolls back and stops with `the stored cursor is not the one this sink last read or wrote`. **Restart the sink** — it resumes from the database cursor. Causes: a second sink of the same module on the same database, a restore/failover that lost commits, or a commit whose reply was lost.
+
+For HA run the same command on several machines with `--standby-lock`: the first sink takes a PostgreSQL session advisory lock and streams; the others wait (checking every `--standby-lock-poll-interval`, default `2s`) without opening a stream, and the first to see the lock released takes over from the stored cursor. Needs a session-capable connection (direct, TCP proxy, or PgBouncer **session** mode — not transaction/statement pooling); set server `tcp_keepalives_idle/interval/count` so a dead active sink is dropped quickly; add `--stall-timeout 2m` to stop a sink that is stuck but still holds its session. Metric: `substreams_sink_postgres_writer_lock_held` (1 active, 0 standby; `--prometheus-addr`). Different-module sinks writing the same tables (e.g. a new module version run with `--on-module-hash-mismatch=warn`) are **not** kept apart by the cursor check — use `--standby-lock`.
+
 ### Want StreamingFast to host this SQL sink?
 
 Use `substreams-hosted-sink` (Portal API) instead of running the binary.

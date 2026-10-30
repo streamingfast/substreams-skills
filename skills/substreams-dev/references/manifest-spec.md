@@ -71,7 +71,7 @@ modules:
   picked up instead.` Write a `README.md` next to `substreams.yaml` instead;
   the packager picks it up automatically. A missing `README.md` prints
   `README (package.doc) not found`.
-- `image`: Container image for custom runtime
+- `image`: Path (relative to the manifest folder) to the package icon shown in the Substreams Registry — JPEG, WebP or PNG, ≤ 2 MiB. (Not a container image.)
 
 > **Avoid the scaffold-warning wall.** A package with `url` + `description` set,
 > a sibling `README.md`, and no `doc:` field builds with zero metadata warnings.
@@ -87,7 +87,11 @@ imports:
     imported_pkg: https://example.com/path/to/package-v1.0.0.spkg
 ```
 
-Imported packages make their protobuf types and modules available for use in your manifest. See sink-specific documentation for required imports.
+Imported packages make their protobuf types and modules available for use in your manifest. See sink-specific documentation for required imports. Referencing imported modules as `<alias>:<module>` reuses server-side caches and lowers cost, so prefer imports over copying source.
+
+Accepted import locations: a local `.spkg` or manifest path, an `http(s)://` URL, an IPFS reference, or a **registry package** `<package>@<version>` / `<org>/<package>@<version>`. The registry form needs **CLI ≥ 1.20.0**, the version is required, and `@latest` is refused (it would bust the cache); on older CLIs use the full URL `https://spkg.io/v1/packages/<slug>/<version>`. A directory or file named `<org>/<package>` next to the manifest wins over the registry — prefix local paths with `./`.
+
+Environment variables (`$VAR` / `${VAR}`) expand in `imports` locations, `protobuf.importPaths`, and the `foundational-store` input; an unset variable is an error, and the built `.spkg` embeds the resolved value.
 
 ### Common Imports
 
@@ -155,6 +159,8 @@ binaries:
     type: wasm/rust-v1
     file: ./target/wasm32-unknown-unknown/release/my_substreams.wasm
 ```
+
+Optional `build:` overrides the command `substreams build` runs (split on spaces, no shell: no pipes/`&&`/quotes), e.g. `build: cargo build --target wasm32-unknown-unknown --release --features my_feature`. Use `type: wasm/rust-v1+wasm-bindgen-shims` when dependencies such as `solana_program` or `alloy` pull in wasm-bindgen imports.
 
 ### Multiple Binaries
 
@@ -253,6 +259,24 @@ biggest cost optimization available. The index alone does nothing; the
 | `query.string` | A static SQE expression: `&&`, `\|\|`, `-`, `( )` over keys |
 | `query.params` | `true` to read the SQE expression from the module's `params` input at runtime |
 
+### `use:` — run another module's code again
+
+```yaml
+modules:
+  - name: usdc_events
+    use: ethereum_common:filtered_events
+    initialBlock: 6082465
+  - name: usdt_events
+    use: ethereum_common:filtered_events
+    initialBlock: 4634748
+
+params:
+  usdc_events: "evt_addr:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+  usdt_events: "evt_addr:0xdac17f958d2ee523a2206206994597c13d831ec7"
+```
+
+`use` copies `kind` (+ `updatePolicy`/`valueType`), `output`, the binary and function, `inputs` (if you set none; a `params` input keeps the used module's default, overridable under `params`) and `blockFilter` (if you set none). It does **not** copy `initialBlock` or `doc`, and the module cannot set `kind`, `output`, `updatePolicy`, `valueType` or `binary`. It also keeps a module's hash across package versions — see [updating-packages.md](./updating-packages.md).
+
 A module with `use:` inherits the used module's `blockFilter`; set
 `blockFilter: {}` to clear an inherited filter.
 
@@ -290,6 +314,27 @@ inputs:
   - params: string
 ```
 
+### Foundational Store Inputs
+
+```yaml
+inputs:
+  - source: sf.ethereum.type.v2.Block
+  - foundational-store: erc20-token-metadata@v0.1.0   # package name@version, or a hosted-store deployment id (UUID)
+```
+
+Read it in Rust with a `FoundationalStore` handler argument (`get_all(&keys)`). Use it for large or static datasets (e.g. ERC20 metadata, SPL initialized accounts) instead of building a store yourself. The identifier is part of the module hash.
+
+## Descriptor Sets (protobuf from the Buf Schema Registry)
+
+```yaml
+protobuf:
+  descriptorSets:
+    - module: buf.build/streamingfast/substreams-sink-sql@v0.1.0   # or `version:` as a separate field — never both
+      symbols: [sf.substreams.sink.sql.v1.Service]                 # optional: import only these
+```
+
+Version must be semver; `@latest` is not allowed inline (use `version: latest` or omit it). `localPath` optionally caches the descriptor. Alternative to vendoring `.proto` files; may be combined with `files`/`importPaths`.
+
 ## Update Policies (Store Modules)
 
 - `set`: Replace existing value
@@ -298,6 +343,7 @@ inputs:
 - `append`: Append to existing bytes value
 - `max`: Keep maximum value
 - `min`: Keep minimum value
+- `set_sum`: Either set the value or sum the two values
 
 ## Value Types (Store Modules)
 

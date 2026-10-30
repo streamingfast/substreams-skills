@@ -224,9 +224,9 @@ fn index_from_block(block: Block) -> Result<Keys, Error> {
 | **sol-transactions** | Filter by program ID and/or account ID via **solana-common** foundational modules |
 | **sol-anchor-beta** | IDL → decoded instructions/events |
 
-Use foundational filters to **narrow input**, then apply domain decoding and the same pre-flight instruction allowlist.
+Use the foundational index (or filtered maps) to **narrow input**, then apply domain decoding and the same pre-flight instruction allowlist.
 
-Note: solana-common modules typically **exclude voting transactions**; for vote-inclusive full blocks use `sf.solana.type.v1.Block` directly. Delayed streams (>~1000 blocks from head) get cost/size benefits with those packages.
+Note: StreamingFast's Solana endpoints **no longer serve vote transactions**, so reading `sf.solana.type.v1.Block` directly already excludes them and `solana_common:blocks_without_votes` only adds a module to your pipeline. Prefer `blockFilter: { module: solana_common:program_ids_without_votes, query: { params: true } }` on a module that takes the raw `Block`; the pre-filtered `transactions_by_programid_without_votes` maps are an alternative that costs an extra module. Delayed streams (>~1000 blocks from head) get cost/size benefits with those packages.
 
 ## Ordering inside a block
 

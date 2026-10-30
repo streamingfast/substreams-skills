@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- `substreams-dev`: new `references/performance.md` (docs "Performance Guidelines": few modules, few independent stores, `substreams::skip_empty_output()`, late `initialBlock`, check-before-decode, bytes until `db_out`, `int64`/`float64` stores, no logging in loops, EVM `eth_call` and Solana notes) and `references/updating-packages.md` (docs "Updating Your Substreams": what feeds the module hash, `use:` / previous-binary options, `substreams tools extract-wasm` / `unpack`, hash comparison with `substreams info`).
+- `substreams-dev` `manifest-spec.md`: `use:`, `foundational-store:` input, `protobuf.descriptorSets`, `binaries[].build`, `wasm-bindgen-shims`, registry import forms and env-var expansion, `set_sum`.
+- `substreams-sink`: RPC protocol v4 / S2 compression notes and partial blocks (Flashblocks) rules. `substreams-sink-deploy-local`: standby sinks (`--standby-lock`, `--stall-timeout`). `substreams-sql`: invalid `UpdateOp` sequence and composite-key `/` fix. `substreams-solana`: versioned transactions (`substreams-solana` >= 0.15.1). `substreams-testing`: module cache only in production mode; cache state when benchmarking.
+
+### Changed
+
+- **Block filtering now leads with a foundational index**: raw `Block` input + `blockFilter` on `ethereum_common:index_events` / `solana_common:program_ids_without_votes`. A custom `blockIndex` is only advised when several modules filter on it; `filtered_*` modules are an alternative (extra module, no tx context; params override still mandatory). Notes that `blockFilter` is block-level, so keep a cheap in-handler address/program check. Touches `substreams-dev`, `substreams-ethereum`, `substreams-solana`, `substreams-convert`.
+- `substreams-dev`: reverses "smaller, focused modules perform better" — the docs say keep the module count small and split only for cross-package reuse.
+- `substreams-solana` / `substreams-dev`: `blocks_without_votes` is no longer recommended; StreamingFast Solana endpoints no longer serve vote transactions.
+- Short registry imports (`name@version`) are documented as working on CLI >= 1.20.0 (older CLIs still need the full `spkg.io` URL) instead of "always 404".
+- `substreams-ethereum`: `eth_call` guidance now prefers trace data and the ERC20 Token Metadata Foundational Store (Ethereum mainnet only) before RPC + cache stores.
+
+### Fixed
+
+- `manifest-spec.md`: `package.image` is the registry icon path (JPEG/WebP/PNG, <= 2 MiB), not a container image.
+
 ## [1.7.0](https://github.com/streamingfast/substreams-skills/releases/tag/v1.7.0)
 
 ### Changed

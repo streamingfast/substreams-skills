@@ -254,7 +254,7 @@ curl "https://substreams.dev/v1/registry/packages?query=uniswap&page_size=5"
 
 **`spkg` vs `reference` — pick the right one:**
 - **`spkg`** — full package URL (`https://spkg.io/v1/packages/<slug>/<version>`). **Use this for execution and for `imports:`**: `substreams run <spkg> <module>`, `substreams gui <spkg>`, `substreams info <spkg>`, `imports: { eth_common: <spkg> }`.
-- **`reference`** — short `<slug>@<version>` notation. **Display only.** The CLI rewrites `name@version` to `https://substreams.dev/v1/packages/<name>/<version>`, which returns an HTML 404. Working download hosts are **`spkg.io`** and **`api.substreams.dev`** only. There is no `@latest` tag — pin the version from `latestVersion` / `spkg`.
+- **`reference`** — short `<slug>@<version>` notation. **Prefer `spkg` for scripted use.** CLIs older than 1.20.0 rewrite `name@version` to `https://substreams.dev/v1/packages/<name>/<version>`, which returns an HTML 404; CLI ≥ 1.20.0 resolves short names through spkg.io. Working download hosts are **`spkg.io`** and **`api.substreams.dev`** only. There is no `@latest` tag — pin the version from `latestVersion` / `spkg`.
 
 Both are absent when no release version is known.
 
@@ -349,63 +349,50 @@ Pin `initialBlock` to the first block your downstream consumer actually needs. T
 
 ## Block & Transaction Filtering (Cost-Critical)
 
-**Whenever a Substreams targets only a subset of blocks — a specific contract, program, event signature, account, or transaction type — add a block index filter. Be aggressive about this.** It is the biggest win available for both your iteration speed and your bill: you are billed for blocks the engine actually processes, so a contract active in 0.5% of blocks costs roughly 0.5% as much, and backfills that would take hours finish in minutes.
+**Whenever a Substreams targets only a subset of blocks — a specific contract, program, event signature, account, or transaction type — add a `blockFilter`. Be aggressive about this.** It is the biggest win available for both your iteration speed and your bill: you are billed for blocks the engine actually processes, so a contract active in 0.5% of blocks costs roughly 0.5% as much, and backfills that would take hours finish in minutes. When the cached index shows a whole segment has no match, the server also skips loading the stores and WASM for that segment.
 
-**The pattern (three pieces):**
+**Default shape: raw `Block` source + `blockFilter` on a foundational index module.** One module reads the block and extracts everything you need; the foundational index is computed once for the whole chain and is very likely already cached, so setting up the filter costs nothing.
 
 ```yaml
-# 1. Index module — kind `blockIndex`, output `Keys`
-- name: index_events
-  kind: blockIndex
-  inputs:
-    - map: all_events
-  output:
-    type: proto:sf.substreams.index.v1.Keys
+imports:
+  ethereum_common: ethereum_common@v0.3.3     # see "Import forms" below
 
-# 2. Consuming module — declares blockFilter to skip non-matching blocks
-- name: filtered_events
-  kind: map
-  blockFilter:
-    module: index_events
-    query:
-      params: true          # SQE query from `params` (or: string: "<expr>")
-  inputs:
-    - params: string
-    - map: all_events
-  output:
-    type: proto:my.types.Events
+modules:
+  - name: map_trades
+    kind: map
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    blockFilter:
+      module: ethereum_common:index_events
+      query:
+        string: evt_addr:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48   # or `params: true` + a `params` input
+    output:
+      type: proto:my.types.v1.Trades
 ```
 
-The index handler is a **`map` handler** returning `Keys` (a `repeated string` of labels you choose):
+Foundational index modules: `ethereum_common:index_events` (`evt_addr:`, `evt_sig:`), `index_calls` (`call_to:`, `call_from:`, `call_method:`), `index_events_and_calls`; `solana_common:program_ids_without_votes` (`program:`), `program_ids_and_accounts_without_votes` (`program:`, `account:`). The `blockFilter.module`'s `initialBlock` cannot be greater than the filtered module's.
 
-```rust
-#[substreams::handlers::map]
-fn index_events(events: Events) -> Result<Keys, Error> {
-    let mut keys = Keys::default();
-    for e in events.events {
-        if e.log.is_set() {
-            if let Some(t0) = e.log.topics.get(0) {
-                keys.keys.push(format!("evt_sig:0x{}", Hex::encode(t0)));
-            }
-            keys.keys.push(format!("evt_addr:0x{}", Hex::encode(&e.log.address)));
-        }
-    }
-    Ok(keys)
-}
-```
-
-**Query (SQE):** boolean expression over keys — `&&`, `||`, `-` (not), `( )` grouping. A bare term must match a key exactly: `"evt_addr:0xA && -evt_addr:0xspam"`.
+**Query (SQE):** boolean expression over keys — `&&`, `||`, `-` (not), `( )` grouping. A bare term must match a key exactly: `"evt_addr:0xa && -evt_addr:0xspam"`.
 
 **Critical rules:**
 - The index does **nothing automatically**. Only a module with an explicit `blockFilter` gets blocks skipped — listing the index as a dependency is not enough.
 - Query namespace must match the emitted key prefix exactly (`evt_addr:` vs `address:`), and values match by **literal equality** — use 0x-prefixed **lowercase** hex (EVM checksum/mixed-case addresses never match).
-- **Don't reinvent.** Most chains ship a foundational package whose `filtered_*` modules already apply the `blockFilter` *and* return only matching records — depend on those via **spkg URL** (short `name@version` imports 404):
-  ```yaml
-  imports:
-    eth_common: https://spkg.io/v1/packages/ethereum-common/v0.3.3
-  # then: map: eth_common:filtered_events
-  ```
-  You **must override the default params** query, or you silently emit the default's data. In-handler filtering is only needed when you roll your own `blockFilter`, or for Solana instruction-level filtering (transactions are pre-filtered, instructions within them are not).
+- **Filter as early as possible**, on the first module that only needs matching blocks; modules that read only from a skipped module are skipped too. Filter on **selective** keys — a query that matches most blocks saves little.
+- **Both `map` and `store` modules take a `blockFilter`; a `blockIndex` module cannot.**
+- **`blockFilter` is block-level, not record-level.** On a kept block your module still sees every event/instruction in it — keep an in-handler check on the raw address / program ID (cheap: compare bytes before decoding) unless you use a `filtered_*` module.
+- On a skipped block your code does not run. During backfill nothing is cached or sent; near chain head you receive an empty output.
+
+**Alternatives, in order of preference:**
+1. **A foundational `filtered_*` module** (`ethereum_common:filtered_events`, `filtered_calls`, `filtered_transactions`; `solana_common:transactions_by_programid_without_votes`) as a `map:` input — it applies the `blockFilter` and returns only matching records. It adds a module (data is copied into your module and written to the cache) and drops the surrounding transaction context, so prefer the raw-`Block` shape above when you need that context or are optimizing for backfill cost. **You must override its default params query**, or you silently emit the default's data:
+   ```yaml
+   inputs:
+     - map: ethereum_common:filtered_events
+   params:
+     ethereum_common:filtered_events: "evt_addr:0xdac17f958d2ee523a2206206994597c13d831ec7"
+   ```
+2. **Your own `blockIndex` module** — only when no foundational index has the keys you need **and several of your modules filter on it**. An index runs on every block, so for a single module it costs about as much as checking the condition in the module's own code. Build it from a module you already need rather than decoding the block a second time, prefix your keys (`evt_addr:`), and do not emit values unique to one block (tx hashes). Handler and manifest: [references/block-filtering.md](./references/block-filtering.md).
+
+**Import forms.** With CLI ≥ 1.20.0 a registry package imports as `<package>@<version>` (or `<org>/<package>@<version>`); the version is required and `@latest` is refused. On older CLIs short names fail with `package does not exist on the Substreams registry` — use the full URL instead: `https://spkg.io/v1/packages/ethereum-common/v0.3.3` (hyphenated slug in the URL, underscored `package.name` in `substreams info`).
 
 **Full guide** (SQE syntax, `params` vs `string`, `use` inheritance, foundational indexes, decision flowchart): [references/block-filtering.md](./references/block-filtering.md).
 
@@ -530,10 +517,36 @@ pub fn store_totals(events: Events, store: StoreAddInt64) {
 
 ## Performance
 
-* **Add a `blockFilter`** to skip irrelevant blocks — by far the biggest cost lever (see above)
-* **Minimize store size** — store only what you need
-* **`--production-mode`** enables parallel execution for large ranges
-* **Module granularity** — smaller, focused modules perform better; avoid deep dependency nesting
+During a backfill the engine spends time reading blocks, running your WASM, reading/writing cached module output, and building stores. Full guide: [references/performance.md](./references/performance.md). The short version:
+
+* **Add a `blockFilter`** on a foundational index — by far the biggest cost lever (see above)
+* **Keep the module count small.** Every module copies its inputs into WASM and writes/reads its output through the cache on every block. Put extraction in **one** module that reads the block; split a module only when other packages will reuse its output. Do **not** split into one module per event/call/instruction "for composability".
+* **Keep stores few and independent.** A store that reads another store (directly or through a map) lands in a later stage — another full pass over every segment, with sequential merging. If a map already extracts what you need, read the map. Delete keys you no longer need; for large datasets use a Foundational Store.
+* **Call `substreams::skip_empty_output()`** when a module has nothing to emit for a block (below).
+* **Set `initialBlock` as late as possible** — the first block that can contain data for the module (contract/program deployment). Matters most for stores, which always backfill from their initial block.
+* **`--production-mode`** enables parallel execution for large ranges (and is the only mode that uses the module cache)
+* **Shipping a new version?** A code change re-hashes every module built from the same WASM, so stores re-backfill from `initialBlock`. Keep old store hashes with `use:` — [references/updating-packages.md](./references/updating-packages.md)
+
+### `skip_empty_output()`
+
+```rust
+#[substreams::handlers::map]
+fn map_trades(block: Block) -> Result<Trades, Error> {
+    substreams::skip_empty_output();
+
+    let trades = extract_trades(&block);
+    Ok(Trades { trades })
+}
+```
+
+A module whose inputs are **all** skipped does not run for that block (only the clock input is ignored in this check). A protobuf message holding only default values counts as empty. Downstream modules therefore stop running too.
+
+### Cheap data, cheap code
+
+* **Check before decoding** — compare the raw address, event signature, or program ID first; decoding is the expensive part.
+* **Keep data as bytes until the end.** Hex/base58-encode only in the last module (e.g. `db_out`). Base58 is especially slow; hex doubles the data size.
+* **Don't log in loops** — every log call formats and copies a string even if nobody reads it.
+* **Prefer `int64` / `float64` store value types** when values fit; `bigint` / `bigdecimal` cost more to encode, decode, and add.
 
 ### Avoid cloning large structures
 

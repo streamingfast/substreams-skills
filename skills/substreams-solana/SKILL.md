@@ -189,9 +189,12 @@ Deep dive: [references/instruction-parsing.md](./references/instruction-parsing.
 
 From program ID(s) + account address(es):
 
-1. **In-module filter** — `if ix.program_id() != PROGRAM { continue; }` and optional account membership checks.
-2. **Index module** (recommended when scanning large ranges) — emit keys like `program:<base58>`, `account:<base58>`, `ix:<name>` so consumers can skip empty slots. Pattern-conventional (not a built example crate here); see [loops-and-filters](./references/loops-and-filters.md).
-3. **Foundational packages** — for “transactions touching program/account X” scaffolding, `substreams init` → **sol-transactions** uses cached [solana-common](https://substreams.dev/streamingfast/solana-common) filters (no voting noise when delayed from head). Still implement domain decoding in your map.
+1. **Block filter on the foundational index** (recommended when scanning large ranges) — keep `source: sf.solana.type.v1.Block` as the input and add `blockFilter: { module: solana_common:program_ids_without_votes, query: { params: true } }` with a `- params: string` input (`program:<base58>`; `program_ids_and_accounts_without_votes` adds `account:`). The index is computed once for the whole chain and is likely already cached. Read the Block directly: StreamingFast's Solana endpoints **no longer serve vote transactions**, so `blocks_without_votes` only adds a module to your pipeline. See `substreams-dev` → `references/block-filtering.md`.
+2. **In-module filter** — `blockFilter` is block-level, so still `if ix.program_id() != PROGRAM { continue; }` **before decoding instruction data**, plus optional account membership checks.
+3. **Foundational `transactions_by_programid_without_votes`** — alternative that hands you only transactions touching the program (`substreams init` → **sol-transactions**, [solana-common](https://substreams.dev/streamingfast/solana-common)); extra module, so prefer (1) unless you want the pre-filtered maps. Override its default params. Still implement domain decoding in your map.
+4. **Own index module** — only when several of your modules filter on keys no foundational index has (an index runs on every block); see [loops-and-filters](./references/loops-and-filters.md).
+
+Keep the module count small (one extraction map reading the block) and call `substreams::skip_empty_output()` when a block yields nothing. Keep data as bytes — base58-encode only in the last module (`db_out`); base58 is slow.
 
 Details: [references/loops-and-filters.md](./references/loops-and-filters.md).
 
@@ -233,6 +236,8 @@ strip = "debuginfo"
 |---|---|
 | `substreams 0.6` + `substreams-solana 0.15`, or `0.7` + `0.14` | Cargo still **builds** — it silently pulls **two** `substreams` copies into the tree. A green build is *not* proof the pins are right; `cargo tree \| grep substreams` should show **one** version. |
 | A buffa row (`0.8.0` + `0.16.0`) mixed with a prost row, or `substreams-database-change` 4 on a `substreams 0.6` tree | Often real **link / type** failures — clean with `rm -rf target && substreams build` after realigning. |
+
+**Versioned transactions (v0 / v1).** Blocks tag each transaction with `version` / `versioned`; v1 transactions also carry `transaction_config` (compute-unit limit, heap size, loaded-accounts data size limit) on `sf.solana.type.v1.Message`. Existing packages keep working unchanged. To *read* these fields use `substreams-solana` ≥ 0.15.1 (0.16.0 on the buffa row), or refresh vendored `sf.solana.type.v1` protos and re-run `substreams protogen`.
 
 Re-check [crates.io/crates/substreams-solana](https://crates.io/crates/substreams-solana) before assuming these pins forever.
 

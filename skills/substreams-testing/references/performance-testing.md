@@ -13,6 +13,13 @@ Measure Substreams module cost before large backfills. Prefer **real heavy block
 
 **Biggest win is usually skipping blocks**, not micro-optimizing a map that already only sees filtered data.
 
+## Cache state decides what you are measuring
+
+- Module output is cached **only in production mode**. Development mode always re-executes the WASM and never reads or writes the cache.
+- The cache key is the **module hash** (WASM binary, inputs, outputs, `initialBlock`, params, `blockFilter`, upstream hashes). Renaming a module does not change it; **any** change to the crate changes the hash of every module built from that file.
+- First production run = real WASM execution + cache population. Re-run = mostly I/O and network delivery. Compare runs with the **same cache state**; to force a cold measurement, change the Rust code so the hash changes (there is no cache-clear command).
+- Stores always backfill from their `initialBlock`, so a late `initialBlock` is the fair-timing lever for them.
+
 ## Criterion benchmarks
 
 ```toml
@@ -90,12 +97,13 @@ Large store state and excessive logging hurt more than tight loops. Reduce store
 
 ## Performance checklist for agents
 
-1. Confirm a **block index + `blockFilter`** if the contract/program is sparse
+1. Confirm a **`blockFilter` on a foundational index** (`ethereum_common:index_events`, `solana_common:program_ids_without_votes`) if the contract/program is sparse
 2. Set `initialBlock` to the consumer’s start (not protocol genesis) for fair timings
 3. Unit-bench map logic on a known heavy fixture
 4. Time `+100` then `+1000` with and without `--production-mode`
 5. Compare JSONL outputs for determinism
-6. Only then optimize Rust (allocations, clones, regexes)
+6. Check the structural guidelines before micro-optimizing: few modules (one extraction map), few independent stores (no store-reads-store chains), `substreams::skip_empty_output()` on sparse maps, no `eth_call`/logging in loops (`substreams-dev` → `references/performance.md`)
+7. Only then optimize Rust (allocations, clones, check-before-decode, bytes until the last module, regexes)
 
 ## Anti-patterns
 

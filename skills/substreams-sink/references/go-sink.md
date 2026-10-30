@@ -283,7 +283,7 @@ The SDK provides these flags automatically via `sink.AddFlagsToSet()`:
 # Basic usage with manifest
 go run . sink substreams.yaml map_events
 
-# From spkg URL (preferred over short name@version — short form often 404s in CLI/registry rewrite)
+# From spkg URL (always works; short name@version needs CLI >= 1.20.0)
 go run . sink https://spkg.io/streamingfast/substreams-eth-block-meta-v0.4.3.spkg db_out
 # or: https://spkg.io/v1/packages/<slug>/<version>
 

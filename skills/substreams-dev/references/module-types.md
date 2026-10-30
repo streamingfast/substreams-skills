@@ -61,6 +61,9 @@ pub fn map_transfers(block: Block) -> Result<Transfers, Error> {
 - Use references when possible
 - Filter early to reduce processing
 - Minimize allocations in hot paths
+- Call `substreams::skip_empty_output()` when there is nothing to emit — downstream modules whose inputs are all skipped then do not run
+- Check the raw address / signature / program ID before decoding; keep data as bytes until the last module
+- Fewer modules is faster: one extraction map that reads the block, not one per event (see [performance.md](./performance.md))
 
 ## Store Modules
 
@@ -186,6 +189,10 @@ inputs:
 - Minimize store size
 - Consider data retention needs
 - Use deltas mode when possible
+- Keep stores few and independent — a store that reads another store runs in a later stage (another full pass per segment, sequential merge). Prefer reading the map that already extracts the data
+- Delete keys you no longer need; use a Foundational Store for large datasets
+- Prefer `int64`/`float64` value types over `bigint`/`bigdecimal` when values fit
+- Set `initialBlock` to the first block with data — stores always backfill from it
 
 ## Index Modules
 
@@ -293,7 +300,9 @@ See [block-filtering.md](./block-filtering.md) for the SQE query syntax and the
 
 ### Best Practices
 
+- Prefer a **foundational** index module (`ethereum_common:index_events`, `solana_common:program_ids_without_votes`); write your own only when several modules filter on it — an index runs on every block
 - Create specific, targeted indexes
+- Never emit per-block-unique values (tx hashes) as keys
 - Use consistent key naming
 - Avoid overly broad indexes
 - Test index effectiveness

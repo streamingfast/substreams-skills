@@ -24,44 +24,33 @@ main() {
 
   version="${version#v}" # Remove leading 'v' if present
 
-  check_sd
   check_git_clean
 
   # Update package.json version
-  sd '"version": ".*?"' "\"version\": \"${version}\"" package.json
+  perl -pi -e "s/\"version\": \".*?\"/\"version\": \"${version}\"/" package.json
 
   # Update Claude Code plugin manifest version
   if [[ -f .claude-plugin/plugin.json ]]; then
-    sd '"version": ".*?"' "\"version\": \"${version}\"" .claude-plugin/plugin.json
+    perl -pi -e "s/\"version\": \".*?\"/\"version\": \"${version}\"/" .claude-plugin/plugin.json
   fi
 
   # Update all SKILL.md files in skills/ directory
   for skill_file in skills/*/SKILL.md; do
     if [[ -f "$skill_file" ]]; then
-      sd '  version: .*' "  version: ${version}" "$skill_file"
+      perl -pi -e "s/^  version: .*/  version: ${version}/" "$skill_file"
     fi
   done
 
   # Update CHANGELOG.md
-  sd '## \[Unreleased\]' "## [${version}](https://${repository}/releases/tag/v${version})" CHANGELOG.md
+  perl -pi -e "s{^## \\[Unreleased\\]}{## [${version}](https://${repository}/releases/tag/v${version})}" CHANGELOG.md
 
   # Validate the project
+  [[ -d node_modules ]] || npm ci --no-audit --no-fund
   npm run validate
 
   if [[ -n $(git status --porcelain) ]]; then
     git add -A .
     git commit -m "Preparing release of ${version}"
-  fi
-}
-
-check_sd() {
-  if ! command -v sd &> /dev/null; then
-    echo "ERROR: 'sd' is required but was not found on your system."
-    echo "Install it with:"
-    echo "  brew install sd     # macOS (Homebrew)"
-    echo "  cargo install sd    # Rust/cargo users"
-    echo "  # Or see https://github.com/chmln/sd for more options."
-    exit 1
   fi
 }
 
@@ -96,7 +85,7 @@ usage() {
   echo "  - package.json: Updates the 'version' field to <version>"
   echo "  - .claude-plugin/plugin.json: Updates the 'version' field to <version>"
   echo "  - skills/*/SKILL.md: Updates the 'version' field in metadata to <version>"
-  echo "  - CHANGELOG.md: Replaces '## [Unreleased]' with '## <version>'"
+  echo "  - CHANGELOG.md: Replaces '## [Unreleased]' with '## [<version>](<release link>)'"
   echo ""
   echo "It will also run 'npm run validate' to validate the skills."
   echo ""
